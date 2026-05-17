@@ -283,6 +283,7 @@ Use SQLAlchemy ORM. Avoid raw SQL unless necessary. All queries must use paramet
 | Field | Type | Notes |
 |---|---|---|
 | `id` | Integer | Primary key |
+| `user_id` | Integer | Foreign key → `users.id` |
 | `title` | String | Plaintext |
 | `website` | String | Plaintext |
 | `username_encrypted` | String | Encrypted (base64 Fernet token) |
