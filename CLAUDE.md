@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+We are building an app described in @spec.md. Read that file for general architectural tasks or to double-check the exact tech
+stack or application architecture.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ---
