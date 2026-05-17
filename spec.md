@@ -543,6 +543,21 @@ Requirements:
 
 **Deliverable:** Deployable containerized application.
 
+### Phase 6 — Multi-User Support
+
+**Goal:** Extend the vault to support multiple independent users, each with their own isolated encrypted vault.
+
+Requirements:
+- Add `username` and `email` fields to the `User` model
+- Add a registration route (`GET /register`, `POST /register`) with username/email/password fields
+- Update login to look up user by username instead of assuming a single local user
+- Ensure all vault queries filter by `user_id` so no user can access another's entries
+- Derive each user's encryption key from their own master password — keys are never shared
+- Update all frontend pages with username/email fields where needed
+- Add user isolation tests verifying one user cannot read or modify another user's entries
+
+**Deliverable:** Multi-user capable application with strict per-user vault isolation.
+
 ---
 
 ## Testing Requirements
@@ -608,7 +623,7 @@ Claude Code should:
 
 - browser extension or password autofill
 - cloud sync or remote storage
-- multi-user support
+- multi-user support (planned for Phase 6)
 - mobile application
 - OAuth or SSO login
 - biometric authentication

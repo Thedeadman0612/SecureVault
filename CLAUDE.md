@@ -113,3 +113,4 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 3. **Phase 3:** Search, category filter, password generator, clipboard auto-clear, dark mode.
 4. **Phase 4:** pytest coverage, ruff linting, type hints, structured logging, architecture docs.
 5. **Phase 5:** Docker, GitHub Actions, `pip-audit`, container hardening.
+6. **Phase 6 (Multi-User):** Add `username`/`email` to `User` model, registration route, login by username, strict `user_id` filtering on all vault queries, per-user encryption key derivation, updated frontend, user isolation tests.
