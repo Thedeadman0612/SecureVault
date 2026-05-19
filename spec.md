@@ -485,6 +485,20 @@ Requirements:
 
 **Deliverable:** Functional local secure vault application.
 
+**Success Criteria:**
+- [ ] App starts without errors with a valid `.env` file
+- [ ] First run redirects to `/setup`; subsequent runs redirect to `/login`
+- [ ] A user can create, view, edit, and delete vault entries end-to-end
+- [ ] Encrypted fields in `securevault.db` are unreadable as plaintext when inspected directly
+- [ ] Logout invalidates the session and redirects to `/login`
+
+**Test Focus:**
+- Fernet encrypt/decrypt round-trip produces the original value
+- PBKDF2HMAC key derivation is deterministic for the same password + salt
+- Argon2 hash and verify (correct password passes, wrong password fails)
+- Vault CRUD operations against an in-memory SQLite test database
+- `/setup` and `/login` integration tests covering valid and invalid inputs
+
 ### Phase 2 — Security Hardening
 
 **Goal:** Improve security posture.
@@ -499,6 +513,19 @@ Requirements:
 - secure error handling (no stack traces in responses)
 
 **Deliverable:** Security-improved application.
+
+**Success Criteria:**
+- [ ] Login is rate-limited; repeated failures trigger a lockout or delay
+- [ ] CSRF tokens are required and validated on all state-changing routes
+- [ ] Session cookies are `HttpOnly`, `Secure`, and `SameSite=Strict`
+- [ ] AES-256-GCM replaces Fernet for all new encryptions
+- [ ] No stack traces or internal error details are ever exposed in the browser
+
+**Test Focus:**
+- Rate limiting triggers after N failed login attempts
+- Requests without a valid CSRF token are rejected with 403
+- AES-256-GCM encrypt/decrypt round-trip
+- Argon2id key derivation produces a consistent, usable key
 
 ### Phase 3 — UX Improvements
 
@@ -515,6 +542,18 @@ Requirements:
 
 **Deliverable:** User-friendly vault UI.
 
+**Success Criteria:**
+- [ ] Search by title and website returns correctly filtered results
+- [ ] Category filter works independently and combined with search
+- [ ] Password generator produces a configurable-length, random password
+- [ ] Copied passwords are cleared from the clipboard after the configured timeout
+- [ ] Dark mode toggle persists across page navigations
+
+**Test Focus:**
+- Search filtering logic (title match, website match, no results case)
+- Password generator meets length and character-set requirements
+- Clipboard auto-clear fires after the configured timeout
+
 ### Phase 4 — Engineering Quality
 
 **Goal:** Make project portfolio-quality.
@@ -530,6 +569,17 @@ Requirements:
 
 **Deliverable:** Professional-grade project repository.
 
+**Success Criteria:**
+- [ ] `pytest` passes with ≥80% code coverage
+- [ ] `ruff check app/` reports zero violations
+- [ ] All public functions and modules carry full type hints
+- [ ] Structured logs capture auth events without leaking any sensitive values
+- [ ] README is complete with setup instructions and architecture diagram
+
+**Test Focus:**
+- Full regression suite passes cleanly with no skipped tests
+- Log output captured in tests contains no passwords, keys, or session tokens
+
 ### Phase 5 — DevSecOps
 
 **Goal:** Learn deployment and DevSecOps concepts.
@@ -543,6 +593,17 @@ Requirements:
 - container hardening (non-root user, minimal base image)
 
 **Deliverable:** Deployable containerized application.
+
+**Success Criteria:**
+- [ ] `docker build` succeeds and the container starts the app correctly
+- [ ] `docker-compose up` brings the full stack up from a cold machine
+- [ ] GitHub Actions CI runs tests and lint on every push and fails on violations
+- [ ] `pip-audit` reports no known critical vulnerabilities
+- [ ] Container process runs as a non-root user
+
+**Test Focus:**
+- Container smoke test: app responds to HTTP requests after `docker-compose up`
+- CI pipeline passes cleanly on a fresh runner with no cached state
 
 ### Phase 6 — Multi-User Support
 
@@ -558,6 +619,17 @@ Requirements:
 - Add user isolation tests verifying one user cannot read or modify another user's entries
 
 **Deliverable:** Multi-user capable application with strict per-user vault isolation.
+
+**Success Criteria:**
+- [ ] Multiple users can register and log in independently
+- [ ] User A cannot read, edit, or delete User B's vault entries
+- [ ] Each user's vault is encrypted with their own derived key — keys are never shared
+- [ ] All vault queries are filtered by `user_id` with no bypass path
+
+**Test Focus:**
+- User isolation: authenticated request as User A attempting to access User B's entry returns 403/404
+- Each user's encrypted data is decryptable only with their own key
+- Registration validation rejects duplicate usernames and weak passwords
 
 ---
 
