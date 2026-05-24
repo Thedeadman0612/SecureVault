@@ -1,1 +1,81 @@
-<!-- First-run setup page — form for creating and confirming the master password -->
+{% extends "base.html" %}
+
+{% block title %}Create Vault — SecureVault{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center px-4">
+  <div class="w-full max-w-sm">
+
+    {# Logo / heading #}
+    <div class="text-center mb-8">
+      <div class="text-5xl mb-3">🔒</div>
+      <h1 class="text-2xl font-bold text-gray-900">SecureVault</h1>
+      <p class="text-gray-500 text-sm mt-1">Create a strong master password to get started</p>
+    </div>
+
+    {# Error alert #}
+    {% if error %}
+    <div class="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {# Setup form #}
+    <form method="POST" action="/setup"
+          class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+
+      <div>
+        <label for="password" class="block text-sm font-medium text-gray-700 mb-1">
+          Master Password
+        </label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          required
+          autofocus
+          autocomplete="new-password"
+          placeholder="At least 12 characters"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+        <p class="text-xs text-gray-400 mt-1">
+          Minimum 12 characters. This password cannot be recovered if forgotten.
+        </p>
+      </div>
+
+      <div>
+        <label for="confirm_password" class="block text-sm font-medium text-gray-700 mb-1">
+          Confirm Password
+        </label>
+        <input
+          id="confirm_password"
+          name="confirm_password"
+          type="password"
+          required
+          autocomplete="new-password"
+          placeholder="Repeat your master password"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+      </div>
+
+      <button
+        type="submit"
+        class="w-full py-2 px-4 bg-indigo-600 text-white text-sm font-medium rounded-lg
+               hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500
+               focus:ring-offset-2 transition-colors"
+      >
+        Create Vault
+      </button>
+
+    </form>
+
+    <p class="text-center text-sm text-gray-500 mt-4">
+      Already set up?
+      <a href="/login" class="text-indigo-600 hover:underline">Unlock your vault</a>
+    </p>
+
+  </div>
+</div>
+{% endblock %}

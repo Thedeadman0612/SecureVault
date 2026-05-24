@@ -24,7 +24,7 @@ SESSION CONTRACT (written by auth_service.login):
 
 EMPTY-STRING CONVENTION (HTML forms always submit all fields):
   HTML forms submit optional fields as empty strings, not None.
-  _none_if_empty() converts "" → None so VaultEntryUpdate treats unedited
+  none_if_empty() converts "" → None so VaultEntryUpdate treats unedited
   fields as "no change" rather than "clear to empty string".
 
 ERROR HANDLING:
@@ -46,6 +46,7 @@ from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.schemas.vault import VaultEntryCreate, VaultEntryUpdate
 from app.services import vault_service
+from app.utils.helpers import first_validation_error, none_if_empty
 
 logger = logging.getLogger(__name__)
 
@@ -81,29 +82,6 @@ def _session_context(request: Request) -> tuple[bytes, int] | RedirectResponse:
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
     return base64.urlsafe_b64decode(key_b64), int(user_id)
 
-
-def _none_if_empty(value: str | None) -> str | None:
-    """Convert an empty or whitespace-only string to None.
-
-    HTML forms submit unedited optional fields as empty strings. This helper
-    normalises them to None so VaultEntryUpdate ignores untouched fields
-    rather than writing empty strings to the database.
-    """
-    if value is None:
-        return None
-    return value.strip() or None
-
-
-def _first_validation_error(exc: ValidationError) -> str:
-    """Extract the first human-readable message from a Pydantic ValidationError.
-
-    Pydantic v2 prefixes field-validator messages with "Value error, ".
-    This helper strips that prefix so templates receive a clean string.
-    """
-    msg: str = exc.errors()[0]["msg"]
-    if msg.startswith("Value error, "):
-        msg = msg[len("Value error, "):]
-    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -193,11 +171,11 @@ async def post_new_entry(
     try:
         data = VaultEntryCreate(
             title=title,
-            website=_none_if_empty(website),
-            category=_none_if_empty(category),
+            website=none_if_empty(website),
+            category=none_if_empty(category),
             username=username,
             password=password,
-            notes=_none_if_empty(notes),
+            notes=none_if_empty(notes),
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
@@ -206,7 +184,7 @@ async def post_new_entry(
                 "request": request,
                 "entry": None,
                 "action": "/entry/new",
-                "error": _first_validation_error(exc),
+                "error": first_validation_error(exc),
             },
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
@@ -302,7 +280,7 @@ async def post_edit_entry(
     """Validate and apply a partial update to an existing vault entry.
 
     Only non-empty fields are written — empty submissions are treated as
-    "no change" via _none_if_empty(). On success, redirects to the entry's
+    "no change" via none_if_empty(). On success, redirects to the entry's
     detail page with 303 See Other.
     """
     ctx = _session_context(request)
@@ -313,12 +291,12 @@ async def post_edit_entry(
     # --- Schema validation ---
     try:
         data = VaultEntryUpdate(
-            title=_none_if_empty(title),
-            website=_none_if_empty(website),
-            category=_none_if_empty(category),
-            username=_none_if_empty(username),
-            password=_none_if_empty(password),
-            notes=_none_if_empty(notes),
+            title=none_if_empty(title),
+            website=none_if_empty(website),
+            category=none_if_empty(category),
+            username=none_if_empty(username),
+            password=none_if_empty(password),
+            notes=none_if_empty(notes),
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
@@ -327,7 +305,7 @@ async def post_edit_entry(
                 "request": request,
                 "entry": None,
                 "action": f"/entry/{entry_id}/edit",
-                "error": _first_validation_error(exc),
+                "error": first_validation_error(exc),
             },
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )

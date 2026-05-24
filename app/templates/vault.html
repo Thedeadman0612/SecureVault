@@ -1,1 +1,122 @@
-<!-- Vault dashboard — lists all entries with title/website/category, plus search bar and add-entry button -->
+{% extends "base.html" %}
+
+{% block title %}My Vault — SecureVault{% endblock %}
+
+{% block nav %}
+<nav class="bg-white border-b border-gray-200 shadow-sm">
+  <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+    <span class="text-indigo-600 font-semibold text-lg">🔒 SecureVault</span>
+    <div class="flex items-center gap-3">
+      <a
+        href="/entry/new"
+        class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg
+               hover:bg-indigo-700 transition-colors"
+      >
+        + New Entry
+      </a>
+      <form method="POST" action="/logout">
+        <button
+          type="submit"
+          class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+                 hover:bg-gray-200 transition-colors"
+        >
+          Lock Vault
+        </button>
+      </form>
+    </div>
+  </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+  {# Decryption error alert — shown when get_entries fails #}
+  {% if error %}
+  <div class="mb-6 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm flex items-start gap-2">
+    <span>⚠</span>
+    <span>{{ error }} Your vault data is intact — try locking and unlocking the vault again.</span>
+  </div>
+  {% endif %}
+
+  {# Page heading + entry count #}
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-xl font-semibold text-gray-900">
+      Vault
+      {% if entries %}
+      <span class="ml-2 text-sm font-normal text-gray-400">
+        ({{ entries | length }} {{ 'entry' if entries | length == 1 else 'entries' }})
+      </span>
+      {% endif %}
+    </h1>
+  </div>
+
+  {% if entries %}
+
+  {# Entry table #}
+  <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="bg-gray-50 border-b border-gray-200">
+          <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider w-2/5">
+            Title
+          </th>
+          <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider w-2/5">
+            Website
+          </th>
+          <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            Category
+          </th>
+          <th class="px-4 py-3 w-16"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for entry in entries %}
+        <tr class="hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 font-medium text-gray-900">{{ entry.title }}</td>
+          <td class="px-4 py-3 text-gray-500 truncate max-w-0">
+            {{ entry.website or '—' }}
+          </td>
+          <td class="px-4 py-3">
+            {% if entry.category %}
+            <span class="inline-block px-2 py-0.5 text-xs rounded-full bg-indigo-50 text-indigo-700 font-medium">
+              {{ entry.category }}
+            </span>
+            {% else %}
+            <span class="text-gray-300">—</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-right">
+            <a
+              href="/entry/{{ entry.id }}"
+              class="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+            >
+              View →
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% else %}
+
+  {# Empty state #}
+  <div class="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-16 text-center">
+    <div class="text-5xl mb-4">🗝</div>
+    <h2 class="text-lg font-medium text-gray-900 mb-1">Your vault is empty</h2>
+    <p class="text-sm text-gray-500 mb-6">Add your first credential to get started.</p>
+    <a
+      href="/entry/new"
+      class="inline-block px-5 py-2 bg-indigo-600 text-white text-sm font-medium
+             rounded-lg hover:bg-indigo-700 transition-colors"
+    >
+      + Add First Entry
+    </a>
+  </div>
+
+  {% endif %}
+
+</div>
+{% endblock %}

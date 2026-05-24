@@ -1,1 +1,185 @@
-<!-- Entry detail view — displays decrypted vault entry fields with edit, delete, and copy-password actions -->
+{% extends "base.html" %}
+
+{% block title %}{{ entry.title }} — SecureVault{% endblock %}
+
+{% block nav %}
+<nav class="bg-white border-b border-gray-200 shadow-sm">
+  <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+    <a href="/vault" class="text-indigo-600 font-semibold text-lg">🔒 SecureVault</a>
+    <form method="POST" action="/logout">
+      <button
+        type="submit"
+        class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+               hover:bg-gray-200 transition-colors"
+      >
+        Lock Vault
+      </button>
+    </form>
+  </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+
+  {# Breadcrumb + title + actions #}
+  <div class="flex items-start justify-between mb-6 gap-4">
+    <div>
+      <a href="/vault" class="text-sm text-gray-400 hover:text-gray-600">← Vault</a>
+      <h1 class="text-xl font-semibold text-gray-900 mt-1 flex items-center gap-2">
+        {{ entry.title }}
+        {% if entry.category %}
+        <span class="px-2 py-0.5 text-xs rounded-full bg-indigo-50 text-indigo-700 font-medium">
+          {{ entry.category }}
+        </span>
+        {% endif %}
+      </h1>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+      <a
+        href="/entry/{{ entry.id }}/edit"
+        class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+               hover:bg-gray-200 transition-colors"
+      >
+        Edit
+      </a>
+      {#
+        Delete uses a POST form — HTML forms only support GET and POST.
+        The confirm dialog prevents accidental deletion.
+      #}
+      <form
+        method="POST"
+        action="/entry/{{ entry.id }}/delete"
+        onsubmit="return confirm('Delete this entry? This cannot be undone.')"
+      >
+        <button
+          type="submit"
+          class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg
+                 hover:bg-red-700 transition-colors"
+        >
+          Delete
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {# Entry detail card #}
+  <div class="bg-white rounded-xl border border-gray-200 shadow-sm divide-y divide-gray-100">
+
+    {# Website #}
+    {% if entry.website %}
+    <div class="px-6 py-4 flex items-center gap-4">
+      <span class="text-sm text-gray-500 w-28 shrink-0">Website</span>
+      {#
+        Only prepend https:// if the stored value has no protocol yet.
+        This handles: "github.com" → "https://github.com" ✅
+                      "https://github.com" → "https://github.com" ✅
+                      "http://github.com"  → "http://github.com"  ✅
+        Anything that doesn't start with http(s):// still gets the prefix,
+        which also keeps "javascript:..." safely unreachable.
+      #}
+      <a
+        href="{{ entry.website if entry.website.startswith(('https://', 'http://')) else 'https://' ~ entry.website }}"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="text-sm text-indigo-600 hover:underline break-all"
+      >
+        {{ entry.website }}
+      </a>
+    </div>
+    {% endif %}
+
+    {# Username #}
+    {% if entry.username %}
+    <div class="px-6 py-4 flex items-center gap-4">
+      <span class="text-sm text-gray-500 w-28 shrink-0">Username</span>
+      <span class="text-sm text-gray-900 font-mono flex-1 break-all">{{ entry.username }}</span>
+      <button
+        type="button"
+        onclick="copyValue({{ entry.username | tojson }}, this)"
+        class="shrink-0 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+      >
+        Copy
+      </button>
+    </div>
+    {% endif %}
+
+    {# Password — hidden by default; show/hide toggle + copy #}
+    <div class="px-6 py-4 flex items-center gap-4">
+      <span class="text-sm text-gray-500 w-28 shrink-0">Password</span>
+      <span
+        id="password-display"
+        class="text-sm text-gray-900 font-mono flex-1 tracking-widest select-none"
+      >
+        ••••••••
+      </span>
+      <div class="flex items-center gap-3 shrink-0">
+        <button
+          type="button"
+          id="toggle-password-btn"
+          onclick="togglePassword()"
+          class="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+        >
+          Show
+        </button>
+        <button
+          type="button"
+          onclick="copyValue(_password, this)"
+          class="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+        >
+          Copy
+        </button>
+      </div>
+    </div>
+
+    {# Notes #}
+    {% if entry.notes %}
+    <div class="px-6 py-4">
+      <span class="text-sm text-gray-500 block mb-2">Notes</span>
+      <p class="text-sm text-gray-900 whitespace-pre-wrap">{{ entry.notes }}</p>
+    </div>
+    {% endif %}
+
+    {# Timestamps #}
+    <div class="px-6 py-3 flex items-center justify-between text-xs text-gray-400 bg-gray-50 rounded-b-xl">
+      <span>Added {{ entry.created_at.strftime('%b %d, %Y') }}</span>
+      <span>Updated {{ entry.updated_at.strftime('%b %d, %Y') }}</span>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  {#
+    The password value is already in the rendered HTML page (sent from the
+    server). togglePassword() and copyValue() read it from a JS variable set
+    at page-load time — never from an embedded string literal in each call,
+    which keeps the logic DRY.
+    tojson ensures the value is safely escaped as a JSON string literal.
+  #}
+  const _password = {{ entry.password | tojson }};
+
+  function togglePassword() {
+    const display = document.getElementById('password-display');
+    const btn     = document.getElementById('toggle-password-btn');
+    const showing = btn.textContent === 'Hide';
+    display.textContent = showing ? '••••••••' : _password;
+    display.classList.toggle('tracking-widest', showing);
+    btn.textContent = showing ? 'Show' : 'Hide';
+  }
+
+  function copyValue(value, btn) {
+    navigator.clipboard.writeText(value).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.classList.add('text-green-600');
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove('text-green-600');
+      }, 1500);
+    });
+  }
+</script>
+{% endblock %}

@@ -139,18 +139,15 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 | `app/services/auth_service.py` | `setup_vault(password, db)` — Argon2id hash + KDF salt + create User row (rejects if user exists) · `login(password, db, session)` — verify hash, derive key, store base64 key + user_id in session · `logout(session)` — session.clear() |
 | `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all filter by user_id; encrypt on write, decrypt on read via `_decrypt_entry()`; `InvalidToken` → HTTP 500 |
 | `app/routes/auth.py` | `GET /setup` (redirect to /login if vault exists) · `POST /setup` (validate → setup_vault → **redirect to /login** 303) · `GET /login` (redirect to /vault if session active) · `POST /login` (login → redirect to /vault 303) · `POST /logout` (logout → redirect to /login 303) |
-| `app/routes/vault.py` | `GET /vault` (list entries) · `GET+POST /entry/new` · `GET /entry/{id}` · `GET+POST /entry/{id}/edit` · `POST /entry/{id}/delete` — all extract raw_key+user_id from session via `_session_context()`; empty form strings → None via `_none_if_empty()`; 404 → redirect to /vault |
+| `app/routes/vault.py` | `GET /vault` (list entries) · `GET+POST /entry/new` · `GET /entry/{id}` · `GET+POST /entry/{id}/edit` · `POST /entry/{id}/delete` — all extract raw_key+user_id from session via `_session_context()`; empty form strings → None via `none_if_empty()` (from helpers); 404 → redirect to /vault |
 | `app/middleware/auth_guard.py` | `AuthGuard(BaseHTTPMiddleware)` — exempts `/login`, `/setup`, `/static/*`; checks `session["encryption_key"]`; redirects unauthenticated requests to `/login` with 302 |
 | `app/main.py` | FastAPI app; `StaticFiles` at `/static`; middleware stack (`AuthGuard` inner, `SessionMiddleware` outer); includes `auth` + `vault` routers; global 404 + 500 handlers; docs disabled |
+| `app/utils/helpers.py` | `first_validation_error(exc) -> str` — strips Pydantic v2 "Value error, " prefix · `none_if_empty(value) -> str \| None` — converts `""` / whitespace → None for HTML form fields |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
-Implement in this order (each layer depends on the one below):
-
 | File | What's needed |
-| `app/routes/auth.py` | `GET/POST /setup`, `GET/POST /login`, `POST /logout` |
-| `app/routes/vault.py` | `GET /vault`, `GET/POST /entry/new`, `GET /entry/{id}`, `POST /entry/{id}/edit`, `POST /entry/{id}/delete` |
-| `app/main.py` | FastAPI app init, `SessionMiddleware`, `AuthGuard` middleware, Jinja2 templates, include routers |
+|---|---|
 | `app/tests/test_hashing.py` | Unit tests for `hash_password` and `verify_password` |
 | `app/tests/test_encryption.py` | Unit tests for all four encryption functions + edge cases |
 | `app/tests/test_vault_service.py` | Integration tests for vault CRUD with encryption roundtrip |

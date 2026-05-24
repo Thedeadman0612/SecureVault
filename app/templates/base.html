@@ -1,1 +1,23 @@
-<!-- Base Jinja2 layout — loads Tailwind CSS via CDN and defines the block structure all pages extend -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}SecureVault{% endblock %}</title>
+  {# Tailwind CDN — Phase 1 only. Replace with compiled CSS in Phase 5. #}
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-900 antialiased">
+
+  {# Navigation bar — overridden by vault/entry pages; empty on auth pages. #}
+  {% block nav %}{% endblock %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  {# Page-specific scripts. #}
+  {% block scripts %}{% endblock %}
+
+</body>
+</html>

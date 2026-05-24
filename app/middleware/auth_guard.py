@@ -71,4 +71,9 @@ class AuthGuard(BaseHTTPMiddleware):
             )
             return RedirectResponse(url=_LOGIN_URL, status_code=302)
 
-        return await call_next(request)
+        response = await call_next(request)
+        # Prevent browsers from caching authenticated pages. Without this,
+        # a cached /entry/{id} page could reveal decrypted passwords to
+        # anyone who presses Back after the session has ended.
+        response.headers["Cache-Control"] = "no-store"
+        return response

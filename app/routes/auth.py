@@ -38,6 +38,7 @@ from app.database.session import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, SetupRequest
 from app.services import auth_service
+from app.utils.helpers import first_validation_error
 
 logger = logging.getLogger(__name__)
 
@@ -58,17 +59,6 @@ _VAULT_URL = "/vault"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _first_validation_error(exc: ValidationError) -> str:
-    """Extract the first human-readable error message from a Pydantic exception.
-
-    Pydantic v2 prefixes field-validator messages with "Value error, ".
-    This helper strips that prefix so templates receive a clean string.
-    """
-    msg: str = exc.errors()[0]["msg"]
-    # Pydantic v2 wraps ValueError messages with this prefix.
-    if msg.startswith("Value error, "):
-        msg = msg[len("Value error, "):]
-    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +99,7 @@ async def post_setup(
     except ValidationError as exc:
         return templates.TemplateResponse(
             _SETUP_TEMPLATE,
-            {"request": request, "error": _first_validation_error(exc)},
+            {"request": request, "error": first_validation_error(exc)},
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
@@ -175,7 +165,7 @@ async def post_login(
     except ValidationError as exc:
         return templates.TemplateResponse(
             _LOGIN_TEMPLATE,
-            {"request": request, "error": _first_validation_error(exc)},
+            {"request": request, "error": first_validation_error(exc)},
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 

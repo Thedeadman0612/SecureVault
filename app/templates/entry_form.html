@@ -1,1 +1,194 @@
-<!-- Add and edit form for a vault entry — fields for title, website, username, password, notes, category -->
+{% extends "base.html" %}
+
+{# Distinguish create vs edit mode by whether `entry` is set. #}
+{% set is_edit = entry is not none %}
+
+{% block title %}{{ 'Edit Entry' if is_edit else 'New Entry' }} — SecureVault{% endblock %}
+
+{% block nav %}
+<nav class="bg-white border-b border-gray-200 shadow-sm">
+  <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+    <a href="/vault" class="text-indigo-600 font-semibold text-lg">🔒 SecureVault</a>
+    <form method="POST" action="/logout">
+      <button
+        type="submit"
+        class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+               hover:bg-gray-200 transition-colors"
+      >
+        Lock Vault
+      </button>
+    </form>
+  </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+
+  {# Breadcrumb #}
+  <div class="flex items-center gap-2 mb-6">
+    <a href="{{ '/entry/' ~ entry.id if is_edit else '/vault' }}"
+       class="text-sm text-gray-400 hover:text-gray-600">
+      ← {{ entry.title if is_edit else 'Vault' }}
+    </a>
+    <span class="text-gray-300">/</span>
+    <span class="text-sm text-gray-700 font-medium">
+      {{ 'Edit Entry' if is_edit else 'New Entry' }}
+    </span>
+  </div>
+
+  {# Error alert #}
+  {% if error %}
+  <div class="mb-5 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  {# Form — action and method come from the route #}
+  <form method="POST" action="{{ action }}"
+        class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-5">
+
+    {# ── Plaintext fields ─────────────────────────────────────────────────── #}
+
+    <div>
+      <label for="title" class="block text-sm font-medium text-gray-700 mb-1">
+        Title <span class="text-red-500">*</span>
+      </label>
+      <input
+        id="title"
+        name="title"
+        type="text"
+        required
+        autofocus
+        value="{{ entry.title if is_edit else '' }}"
+        placeholder="e.g. GitHub, Gmail, Netflix"
+        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+               focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+      >
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label for="website" class="block text-sm font-medium text-gray-700 mb-1">Website</label>
+        <input
+          id="website"
+          name="website"
+          type="text"
+          value="{{ entry.website or '' if is_edit else '' }}"
+          placeholder="e.g. github.com"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+      </div>
+      <div>
+        <label for="category" class="block text-sm font-medium text-gray-700 mb-1">Category</label>
+        <input
+          id="category"
+          name="category"
+          type="text"
+          value="{{ entry.category or '' if is_edit else '' }}"
+          placeholder="e.g. Work, Personal"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+      </div>
+    </div>
+
+    <hr class="border-gray-100">
+
+    {# ── Encrypted fields ─────────────────────────────────────────────────── #}
+
+    <div>
+      <label for="username" class="block text-sm font-medium text-gray-700 mb-1">
+        Username / Email
+      </label>
+      <input
+        id="username"
+        name="username"
+        type="text"
+        value="{{ entry.username if is_edit else '' }}"
+        autocomplete="off"
+        placeholder="username or email address"
+        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+               focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+      >
+    </div>
+
+    <div>
+      <label for="form-password" class="block text-sm font-medium text-gray-700 mb-1">
+        Password
+        {% if not is_edit %}<span class="text-red-500">*</span>{% endif %}
+      </label>
+      <div class="relative">
+        <input
+          id="form-password"
+          name="password"
+          type="password"
+          {% if not is_edit %}required{% endif %}
+          autocomplete="off"
+          placeholder="{{ 'Leave blank to keep current password' if is_edit else 'Enter password' }}"
+          class="w-full px-3 py-2 pr-16 border border-gray-300 rounded-lg text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+        <button
+          type="button"
+          id="toggle-form-password"
+          onclick="toggleVisibility('form-password', 'toggle-form-password')"
+          class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-indigo-600
+                 hover:text-indigo-800 font-medium"
+        >
+          Show
+        </button>
+      </div>
+      {% if is_edit %}
+      <p class="text-xs text-gray-400 mt-1">Leave blank to keep the existing password unchanged.</p>
+      {% endif %}
+    </div>
+
+    <div>
+      <label for="notes" class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+      <textarea
+        id="notes"
+        name="notes"
+        rows="3"
+        placeholder="Optional notes (stored encrypted)"
+        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+               focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+      >{{ entry.notes or '' if is_edit else '' }}</textarea>
+    </div>
+
+    {# ── Action buttons ───────────────────────────────────────────────────── #}
+
+    <div class="flex items-center justify-end gap-3 pt-2">
+      <a
+        href="{{ '/entry/' ~ entry.id if is_edit else '/vault' }}"
+        class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+               hover:bg-gray-200 transition-colors"
+      >
+        Cancel
+      </a>
+      <button
+        type="submit"
+        class="px-5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg
+               hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500
+               focus:ring-offset-2 transition-colors"
+      >
+        {{ 'Save Changes' if is_edit else 'Add Entry' }}
+      </button>
+    </div>
+
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function toggleVisibility(inputId, btnId) {
+    const input = document.getElementById(inputId);
+    const btn   = document.getElementById(btnId);
+    const show  = input.type === 'password';
+    input.type  = show ? 'text' : 'password';
+    btn.textContent = show ? 'Hide' : 'Show';
+  }
+</script>
+{% endblock %}
