@@ -131,9 +131,11 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 | `app/config/settings.py` | Pydantic `BaseSettings` loading `SECRET_KEY`, `DATABASE_URL`, `SESSION_TIMEOUT_MINUTES` from `.env` |
 | `app/migrations/versions/9680c40ab116_initial_tables.py` | Alembic initial migration — creates `users` and `vault_entries` tables. Run: `alembic upgrade head` |
 | `app/security/hashing.py` | `hash_password(plain) -> str` (Argon2id PHC string) · `verify_password(plain, hash) -> bool` (catches `VerifyMismatchError`, propagates all others) |
-| `app/security/encryption.py` | `generate_kdf_salt() -> str` (32-byte CSPRNG, base64) · `derive_key(password, salt_b64) -> bytes` (PBKDF2HMAC SHA-256, 600k iters) · `encrypt_field(value, raw_key) -> str` (Fernet token) · `decrypt_field(token, raw_key) -> str` (raises `InvalidToken` on bad key/tamper — caller must catch) |
+| `app/security/encryption.py` | `generate_kdf_salt() -> str` (32-byte CSPRNG, base64) · `derive_key(password, salt_b64) -> bytes` (PBKDF2HMAC SHA-256, 600k iters, salt-length guard) · `encrypt_field(value, raw_key) -> str` (Fernet token) · `decrypt_field(token, raw_key) -> str` (raises `InvalidToken` — re-exported for callers) |
 | `app/templates/` | All 6 HTML templates created: `base.html`, `login.html`, `setup.html`, `vault.html`, `entry_form.html`, `entry_detail.html` |
 | `app/static/` | CSS and JS asset directories created |
+| `app/schemas/auth.py` | `SetupRequest` (password + confirm_password, min-length ≥12, match validator) · `LoginRequest` (password) · `MessageResponse` (message + success: bool = True) |
+| `app/schemas/vault.py` | `VaultEntryCreate` (title + password required, sensitive fields documented) · `VaultEntryUpdate` (all fields optional) · `VaultEntryResponse` (decrypted field names: `username`, `password`, `notes`; includes `id`, timestamps) |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
@@ -141,8 +143,6 @@ Implement in this order (each layer depends on the one below):
 
 | File | What's needed |
 |---|---|
-| `app/schemas/auth.py` | Pydantic schemas: `SetupRequest`, `LoginRequest` |
-| `app/schemas/vault.py` | Pydantic schemas: `VaultEntryCreate`, `VaultEntryUpdate`, `VaultEntryResponse` |
 | `app/middleware/auth_guard.py` | Starlette middleware — checks session for `encryption_key`, redirects to `/login` if missing; allows `/login`, `/setup`, `/static` through unauthenticated |
 | `app/services/auth_service.py` | `setup_vault(password, db)` — hash + salt + create User row · `login(password, db, session)` — verify hash, derive key, store raw key in session · `logout(session)` — clear session |
 | `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all encrypt/decrypt fields using key from session; all filter by `user_id` |
