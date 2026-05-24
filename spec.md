@@ -89,23 +89,31 @@ Avoid:
 | Testing | pytest |
 | Package Manager | pip / uv |
 | Deployment (later) | Docker |
+| Mobile — PWA (Phase 7A) | `manifest.json` + Service Worker |
+| Mobile — API Auth (Phase 7B) | `python-jose` (JWT) |
+| Mobile — Android client (Phase 7B) | Flutter (Dart) |
 
 ---
 
 ## High-Level System Architecture
 
 ```
-Browser
-  ↓
-FastAPI Web Application
-  ↓
-Authentication Layer
-  ↓
-Encryption Service
-  ↓
-Database Access Layer
-  ↓
-SQLite Database
+Browser (HTML)          Android App (Phase 7B)
+     ↓                          ↓
+     ↓              /api/v1/ (JSON + JWT)
+     ↓                          ↓
+     └──────────────────────────┘
+                  ↓
+     FastAPI Web Application
+                  ↓
+     Authentication Layer
+       (Session cookie  /  JWT Bearer)
+                  ↓
+     Encryption Service
+                  ↓
+     Database Access Layer
+                  ↓
+       SQLite Database
 ```
 
 ---
@@ -631,6 +639,86 @@ Requirements:
 - Each user's encrypted data is decryptable only with their own key
 - Registration validation rejects duplicate usernames and weak passwords
 
+### Phase 7 — Mobile Support (PWA + Android)
+
+**Goal:** Make SecureVault accessible on Android devices — first as an installable Progressive Web App, then as a native Android client backed by a JSON REST API.
+
+This phase is split into two independent sub-phases that can be delivered separately.
+
+---
+
+#### Phase 7A — Progressive Web App (PWA)
+
+**Goal:** Make the existing web UI installable on Android's home screen with offline asset caching, requiring no new backend code.
+
+Requirements:
+- Add `app/static/manifest.json` — app name, short name, icons (192×192 and 512×512 PNG), theme colour, `display: standalone`
+- Add `app/static/sw.js` — service worker that pre-caches Tailwind CSS and static assets so the shell loads offline
+- Link manifest and register the service worker in `base.html`
+- Add `<meta name="mobile-web-app-capable">` and `<meta name="apple-mobile-web-app-capable">` to `base.html`
+- Audit and fix any responsive layout issues at 375px–430px viewport widths
+
+**Deliverable:** SecureVault installable via "Add to Home Screen" on Android Chrome; opens in standalone mode without browser chrome.
+
+**Success Criteria:**
+- [ ] Chrome's "Add to Home Screen" prompt appears when visiting the app on Android
+- [ ] App opens in standalone mode (no browser URL bar)
+- [ ] Static assets load from service worker cache when the server is unreachable
+- [ ] All pages are usable without horizontal scrolling on a 390px-wide screen
+
+**Limitation:** The phone and the server must be on the same Wi-Fi network (local-first constraint). The app is not accessible over the public internet unless the server is exposed via a reverse proxy or VPN.
+
+**Test Focus:**
+- Lighthouse PWA audit passes installability checks
+- Service worker caches the app shell on first load
+- Responsive layout tests at 375px, 390px, and 430px viewport widths
+
+---
+
+#### Phase 7B — Native Android Client
+
+**Goal:** Build a native Android app (Flutter recommended) that communicates with SecureVault via a new JSON REST API, using JWT authentication instead of browser session cookies.
+
+**Prerequisite:** Phase 6 (multi-user) must be complete — a single-user vault has limited value as a networked app.
+
+**Backend changes required:**
+
+| Area | Change |
+|---|---|
+| `app/routes/api.py` | New router at `/api/v1/` — mirrors all vault CRUD + auth routes, returns JSON instead of HTML |
+| `app/schemas/api.py` | JSON request/response schemas for the REST API layer |
+| `app/security/tokens.py` | JWT access token (short-lived) + refresh token (long-lived) generation and verification via `python-jose` |
+| `POST /api/v1/login` | Returns `{ access_token, refresh_token }` on success; never sets a cookie |
+| `POST /api/v1/refresh` | Accepts a refresh token, returns a new access token |
+| `POST /api/v1/logout` | Invalidates the refresh token |
+| `app/middleware/auth_guard.py` | Extend to accept `Authorization: Bearer <token>` for `/api/v1/*` routes alongside the existing session cookie check for HTML routes |
+
+**Android client (new top-level directory `android/`):**
+
+| Component | Detail |
+|---|---|
+| Framework | Flutter (Dart) — cross-platform, single codebase for Android and iOS |
+| HTTP client | `dio` package — handles JWT token refresh transparently |
+| Secure storage | `flutter_secure_storage` — stores the refresh token in Android Keystore |
+| Biometric unlock | `local_auth` — optional Face/Fingerprint unlock to derive the in-memory key |
+| Architecture | Repository pattern: `AuthRepository`, `VaultRepository` → `ChangeNotifier` state → Flutter widgets |
+
+**Deliverable:** Flutter Android app that logs in, lists, creates, views, edits, and deletes vault entries via the JSON API; refresh token stored in Android Keystore.
+
+**Success Criteria:**
+- [ ] `POST /api/v1/login` returns valid JWT tokens and rejects wrong passwords with 401
+- [ ] All `/api/v1/` routes require a valid Bearer token; requests without one return 401
+- [ ] HTML routes continue to work unchanged (no regression on the web UI)
+- [ ] Flutter app installs and runs on Android API 26+ (Android 8+)
+- [ ] Refresh token is persisted in Android Keystore, not in plain shared preferences
+- [ ] Token refresh happens transparently — the user is not logged out when the access token expires
+
+**Test Focus:**
+- JWT token generation, verification, and expiry
+- API routes return 401 for missing/expired tokens and 200 for valid ones
+- HTML routes are unaffected by the new API middleware
+- Flutter widget tests for login flow and vault list
+
 ---
 
 ## Testing Requirements
@@ -697,9 +785,9 @@ Claude Code should:
 - browser extension or password autofill
 - cloud sync or remote storage
 - multi-user support (planned for Phase 6)
-- mobile application
+- mobile application (PWA planned for Phase 7A; native Android client planned for Phase 7B)
 - OAuth or SSO login
-- biometric authentication
+- biometric authentication (considered for Phase 7B Android client only)
 - zero-knowledge cloud architecture
 - enterprise features
 

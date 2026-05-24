@@ -114,10 +114,36 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 4. **Phase 4:** pytest coverage, ruff linting, type hints, structured logging, architecture docs.
 5. **Phase 5:** Docker, GitHub Actions, `pip-audit`, container hardening.
 6. **Phase 6 (Multi-User):** Add `username`/`email` to `User` model, registration route, login by username, strict `user_id` filtering on all vault queries, per-user encryption key derivation, updated frontend, user isolation tests.
+7. **Phase 7 (Mobile):** Two-part mobile rollout — 7A: PWA (manifest, service worker, responsive polish, installable on Android); 7B: Native Android client via Flutter + JSON REST API layer (`/api/v1/`) + JWT auth alongside existing session cookies.
 
 ---
 
 ## Progress Tracker
+
+### Phase 7 — Status: 🔴 Not Started
+
+#### Phase 7A — PWA
+
+| File | What's needed |
+|---|---|
+| `app/static/manifest.json` | Web app manifest — name, icons, theme colour, `display: standalone` |
+| `app/static/sw.js` | Service worker — cache static assets for offline access |
+| `app/templates/base.html` | Link `manifest.json`; add `<meta>` tags for mobile web app capability |
+| `app/static/icons/` | App icon set (192×192, 512×512 PNG) for Android home screen |
+| Responsive layout audit | Review all templates on small screens; fix any overflow/layout issues |
+
+#### Phase 7B — Native Android Client
+
+| File / Area | What's needed |
+|---|---|
+| `app/routes/api.py` | New router: `/api/v1/` JSON endpoints mirroring HTML routes (vault CRUD + auth) |
+| `app/schemas/api.py` | JSON request/response schemas for the REST API |
+| `app/security/tokens.py` | JWT access + refresh token generation and verification (`python-jose`) |
+| `app/routes/auth.py` | Add `POST /api/v1/login` → returns JWT; `POST /api/v1/logout` → blacklist/expire token |
+| `android/` | Flutter (recommended) or Kotlin Android project consuming `/api/v1/` |
+| `app/middleware/auth_guard.py` | Extend to accept `Authorization: Bearer <token>` on `/api/v1/*` routes |
+
+---
 
 ### Phase 1 — Status: 🟡 In Progress
 
