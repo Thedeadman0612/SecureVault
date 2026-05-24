@@ -136,6 +136,9 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 | `app/static/` | CSS and JS asset directories created |
 | `app/schemas/auth.py` | `SetupRequest` (password + confirm_password, min-length ≥12, match validator) · `LoginRequest` (password) · `MessageResponse` (message + success: bool = True) |
 | `app/schemas/vault.py` | `VaultEntryCreate` (title + password required, sensitive fields documented) · `VaultEntryUpdate` (all fields optional) · `VaultEntryResponse` (decrypted field names: `username`, `password`, `notes`; includes `id`, timestamps) |
+| `app/services/auth_service.py` | `setup_vault(password, db)` — Argon2id hash + KDF salt + create User row (rejects if user exists) · `login(password, db, session)` — verify hash, derive key, store base64 key + user_id in session · `logout(session)` — session.clear() |
+| `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all filter by user_id; encrypt on write, decrypt on read via `_decrypt_entry()`; `InvalidToken` → HTTP 500 |
+| `app/routes/auth.py` | `GET /setup` (redirect to /login if vault exists) · `POST /setup` (validate → setup_vault → **redirect to /login** 303) · `GET /login` (redirect to /vault if session active) · `POST /login` (login → redirect to /vault 303) · `POST /logout` (logout → redirect to /login 303) |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
@@ -144,8 +147,6 @@ Implement in this order (each layer depends on the one below):
 | File | What's needed |
 |---|---|
 | `app/middleware/auth_guard.py` | Starlette middleware — checks session for `encryption_key`, redirects to `/login` if missing; allows `/login`, `/setup`, `/static` through unauthenticated |
-| `app/services/auth_service.py` | `setup_vault(password, db)` — hash + salt + create User row · `login(password, db, session)` — verify hash, derive key, store raw key in session · `logout(session)` — clear session |
-| `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all encrypt/decrypt fields using key from session; all filter by `user_id` |
 | `app/routes/auth.py` | `GET/POST /setup`, `GET/POST /login`, `POST /logout` |
 | `app/routes/vault.py` | `GET /vault`, `GET/POST /entry/new`, `GET /entry/{id}`, `POST /entry/{id}/edit`, `POST /entry/{id}/delete` |
 | `app/main.py` | FastAPI app init, `SessionMiddleware`, `AuthGuard` middleware, Jinja2 templates, include routers |
