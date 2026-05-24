@@ -139,6 +139,7 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 | `app/services/auth_service.py` | `setup_vault(password, db)` — Argon2id hash + KDF salt + create User row (rejects if user exists) · `login(password, db, session)` — verify hash, derive key, store base64 key + user_id in session · `logout(session)` — session.clear() |
 | `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all filter by user_id; encrypt on write, decrypt on read via `_decrypt_entry()`; `InvalidToken` → HTTP 500 |
 | `app/routes/auth.py` | `GET /setup` (redirect to /login if vault exists) · `POST /setup` (validate → setup_vault → **redirect to /login** 303) · `GET /login` (redirect to /vault if session active) · `POST /login` (login → redirect to /vault 303) · `POST /logout` (logout → redirect to /login 303) |
+| `app/routes/vault.py` | `GET /vault` (list entries) · `GET+POST /entry/new` · `GET /entry/{id}` · `GET+POST /entry/{id}/edit` · `POST /entry/{id}/delete` — all extract raw_key+user_id from session via `_session_context()`; empty form strings → None via `_none_if_empty()`; 404 → redirect to /vault |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
