@@ -46,12 +46,14 @@ from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.schemas.vault import VaultEntryCreate, VaultEntryUpdate
 from app.services import vault_service
-from app.utils.helpers import first_validation_error, none_if_empty
+from app.utils.helpers import first_validation_error, format_datetime, none_if_empty, truncate
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["format_datetime"] = format_datetime
+templates.env.filters["truncate_str"] = truncate
 
 # Template name constants.
 _VAULT_TEMPLATE        = "vault.html"

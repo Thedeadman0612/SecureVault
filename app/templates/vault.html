@@ -73,7 +73,7 @@
       <tbody class="divide-y divide-gray-100">
         {% for entry in entries %}
         <tr class="hover:bg-gray-50 transition-colors">
-          <td class="px-4 py-3 font-medium text-gray-900">{{ entry.title }}</td>
+          <td class="px-4 py-3 font-medium text-gray-900">{{ entry.title | truncate_str }}</td>
           <td class="px-4 py-3 text-gray-500 truncate max-w-0">
             {{ entry.website or '—' }}
           </td>

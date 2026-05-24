@@ -142,8 +142,8 @@
 
     {# Timestamps #}
     <div class="px-6 py-3 flex items-center justify-between text-xs text-gray-400 bg-gray-50 rounded-b-xl">
-      <span>Added {{ entry.created_at.strftime('%b %d, %Y') }}</span>
-      <span>Updated {{ entry.updated_at.strftime('%b %d, %Y') }}</span>
+      <span>Added {{ format_datetime(entry.created_at) }}</span>
+      <span>Updated {{ format_datetime(entry.updated_at) }}</span>
     </div>
 
   </div>
