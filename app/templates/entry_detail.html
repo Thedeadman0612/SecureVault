@@ -140,10 +140,13 @@
     </div>
     {% endif %}
 
-    {# Timestamps #}
+    {# Timestamps — rendered as UTC ISO strings; the base.html script converts
+       them to the browser's local timezone via the data-utc attribute.
+       format_datetime() output is the server-side fallback (shown briefly
+       before JS runs, or if JS is disabled). #}
     <div class="px-6 py-3 flex items-center justify-between text-xs text-gray-400 bg-gray-50 rounded-b-xl">
-      <span>Added {{ format_datetime(entry.created_at) }}</span>
-      <span>Updated {{ format_datetime(entry.updated_at) }}</span>
+      <span>Added <time data-utc="{{ entry.created_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z">{{ format_datetime(entry.created_at) }}</time></span>
+      <span>Updated <time data-utc="{{ entry.updated_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z">{{ format_datetime(entry.updated_at) }}</time></span>
     </div>
 
   </div>
