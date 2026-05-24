@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/update_progress.sh",
+            "timeout": 10,
+            "statusMessage": "Checking for progress tracker updates..."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -114,3 +114,83 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 4. **Phase 4:** pytest coverage, ruff linting, type hints, structured logging, architecture docs.
 5. **Phase 5:** Docker, GitHub Actions, `pip-audit`, container hardening.
 6. **Phase 6 (Multi-User):** Add `username`/`email` to `User` model, registration route, login by username, strict `user_id` filtering on all vault queries, per-user encryption key derivation, updated frontend, user isolation tests.
+
+---
+
+## Progress Tracker
+
+### Phase 1 — Status: 🟡 In Progress
+
+#### ✅ Completed
+
+| File | What was done |
+|---|---|
+| `app/models/user.py` | `User` ORM model — `id`, `password_hash`, `kdf_salt`, `created_at`, `updated_at`, relationship to `VaultEntry` |
+| `app/models/vault_entry.py` | `VaultEntry` ORM model — `user_id` FK, plaintext fields (`title`, `website`, `category`), encrypted fields (`username_encrypted`, `password_encrypted`, `notes_encrypted`) |
+| `app/database/session.py` | SQLAlchemy engine, `SessionLocal`, `get_db` dependency |
+| `app/config/settings.py` | Pydantic `BaseSettings` loading `SECRET_KEY`, `DATABASE_URL`, `SESSION_TIMEOUT_MINUTES` from `.env` |
+| `app/migrations/versions/9680c40ab116_initial_tables.py` | Alembic initial migration — creates `users` and `vault_entries` tables. Run: `alembic upgrade head` |
+| `app/security/hashing.py` | `hash_password(plain) -> str` (Argon2id PHC string) · `verify_password(plain, hash) -> bool` (catches `VerifyMismatchError`, propagates all others) |
+| `app/security/encryption.py` | `generate_kdf_salt() -> str` (32-byte CSPRNG, base64) · `derive_key(password, salt_b64) -> bytes` (PBKDF2HMAC SHA-256, 600k iters) · `encrypt_field(value, raw_key) -> str` (Fernet token) · `decrypt_field(token, raw_key) -> str` (raises `InvalidToken` on bad key/tamper — caller must catch) |
+| `app/templates/` | All 6 HTML templates created: `base.html`, `login.html`, `setup.html`, `vault.html`, `entry_form.html`, `entry_detail.html` |
+| `app/static/` | CSS and JS asset directories created |
+
+#### ❌ Still To Implement (remaining Phase 1 stubs)
+
+Implement in this order (each layer depends on the one below):
+
+| File | What's needed |
+|---|---|
+| `app/schemas/auth.py` | Pydantic schemas: `SetupRequest`, `LoginRequest` |
+| `app/schemas/vault.py` | Pydantic schemas: `VaultEntryCreate`, `VaultEntryUpdate`, `VaultEntryResponse` |
+| `app/middleware/auth_guard.py` | Starlette middleware — checks session for `encryption_key`, redirects to `/login` if missing; allows `/login`, `/setup`, `/static` through unauthenticated |
+| `app/services/auth_service.py` | `setup_vault(password, db)` — hash + salt + create User row · `login(password, db, session)` — verify hash, derive key, store raw key in session · `logout(session)` — clear session |
+| `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all encrypt/decrypt fields using key from session; all filter by `user_id` |
+| `app/routes/auth.py` | `GET/POST /setup`, `GET/POST /login`, `POST /logout` |
+| `app/routes/vault.py` | `GET /vault`, `GET/POST /entry/new`, `GET /entry/{id}`, `POST /entry/{id}/edit`, `POST /entry/{id}/delete` |
+| `app/main.py` | FastAPI app init, `SessionMiddleware`, `AuthGuard` middleware, Jinja2 templates, include routers |
+| `app/tests/test_hashing.py` | Unit tests for `hash_password` and `verify_password` |
+| `app/tests/test_encryption.py` | Unit tests for all four encryption functions + edge cases |
+| `app/tests/test_vault_service.py` | Integration tests for vault CRUD with encryption roundtrip |
+| `app/tests/test_auth_routes.py` | Integration tests for setup/login/logout flow |
+
+#### 🔑 Key Implementation Notes for Remaining Work
+
+**Session key storage convention** (auth_service → vault_service contract):
+```python
+# auth_service stores key as base64 string (JSON-serialisable):
+import base64
+request.session["encryption_key"] = base64.urlsafe_b64encode(raw_key).decode()
+
+# vault_service reads it back as raw bytes:
+raw_key = base64.urlsafe_b64decode(request.session["encryption_key"])
+```
+
+**`InvalidToken` handling in vault_service** — always catch at the service layer.
+Import `InvalidToken` from this module (not from `cryptography.fernet` directly — it is re-exported to keep callers decoupled from the underlying library):
+```python
+from app.security.encryption import decrypt_field, InvalidToken
+
+try:
+    username = decrypt_field(entry.username_encrypted, raw_key)
+except InvalidToken:
+    # log non-sensitive: "decryption failed for entry {id}"
+    raise HTTPException(status_code=500, detail="Unable to decrypt entry.")
+```
+
+**`ValueError` from `derive_key()` in auth_service** — catch at the service layer.
+`derive_key()` raises `ValueError` if the stored `kdf_salt` decodes to the wrong byte length (indicates DB corruption). Never let this propagate to the browser:
+```python
+from app.security.encryption import derive_key
+
+try:
+    raw_key = derive_key(master_password, user.kdf_salt)
+except ValueError:
+    # log non-sensitive: "kdf_salt length invalid for user {id}"
+    raise HTTPException(status_code=500, detail="Login failed. Please contact support.")
+```
+
+**Auth guard exempt paths** — do not redirect these to `/login`:
+- `GET /login`, `POST /login`
+- `GET /setup`, `POST /setup`
+- `GET /static/*`

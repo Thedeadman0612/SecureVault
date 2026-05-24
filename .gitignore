@@ -30,3 +30,9 @@ app/migrations/__pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Claude Code personal settings
+.claude/settings.local.json
+
+# Claude auto-memory (personal, not team)
+.claude/memory/
