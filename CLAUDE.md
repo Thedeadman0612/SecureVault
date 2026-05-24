@@ -143,15 +143,14 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 | `app/middleware/auth_guard.py` | `AuthGuard(BaseHTTPMiddleware)` — exempts `/login`, `/setup`, `/static/*`; checks `session["encryption_key"]`; redirects unauthenticated requests to `/login` with 302 |
 | `app/main.py` | FastAPI app; `StaticFiles` at `/static`; middleware stack (`AuthGuard` inner, `SessionMiddleware` outer); includes `auth` + `vault` routers; global 404 + 500 handlers; docs disabled |
 | `app/utils/helpers.py` | `first_validation_error(exc) -> str` — strips Pydantic v2 "Value error, " prefix · `none_if_empty(value) -> str \| None` — converts `""` / whitespace → None for HTML form fields |
+| `app/tests/test_hashing.py` | Unit tests for `hash_password` and `verify_password` — output format, uniqueness (salting), correct/wrong/empty/unicode passwords, malformed/corrupted hash propagation, strict `bool` return type |
+| `app/tests/test_encryption.py` | Unit tests for all four encryption functions + `InvalidToken` re-export — salt format/uniqueness, key derivation determinism and length, Fernet token format and random IV, encrypt/decrypt roundtrip, wrong-key and tampered-token `InvalidToken`, wrong-length key/salt `ValueError` |
+| `app/tests/test_vault_service.py` | Integration tests for vault CRUD with in-memory SQLite — create/read/update/delete, encryption-on-write and decryption-on-read, `None` notes, user isolation across all operations, `InvalidToken` → HTTP 500 for tampered ciphertext or wrong key |
+| `app/tests/test_auth_routes.py` | Full-stack integration tests via `TestClient` (in-memory DB, full middleware) — `GET`/`POST /setup`, `GET`/`POST /login`, `POST /logout`; redirect behaviour, validation errors, duplicate setup, session state after login/logout, no-vault 401, identical error message for user-enumeration resistance |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
-| File | What's needed |
-|---|---|
-| `app/tests/test_hashing.py` | Unit tests for `hash_password` and `verify_password` |
-| `app/tests/test_encryption.py` | Unit tests for all four encryption functions + edge cases |
-| `app/tests/test_vault_service.py` | Integration tests for vault CRUD with encryption roundtrip |
-| `app/tests/test_auth_routes.py` | Integration tests for setup/login/logout flow |
+_None — all Phase 1 files are implemented._ 🎉
 
 #### 🔑 Key Implementation Notes for Remaining Work
 

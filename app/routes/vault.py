@@ -122,8 +122,8 @@ async def get_vault(request: Request, db: Session = Depends(get_db)) -> HTMLResp
         )
 
     return templates.TemplateResponse(
-        _VAULT_TEMPLATE,
-        {"request": request, "entries": entries, "error": error},
+        request, _VAULT_TEMPLATE,
+        {"entries": entries, "error": error},
     )
 
 
@@ -143,12 +143,12 @@ async def get_new_entry(request: Request) -> HTMLResponse:
         return ctx
 
     return templates.TemplateResponse(
-        _ENTRY_FORM_TEMPLATE,
-        {"request": request, "entry": None, "action": "/entry/new"},
+        request, _ENTRY_FORM_TEMPLATE,
+        {"entry": None, "action": "/entry/new"},
     )
 
 
-@router.post("/entry/new")
+@router.post("/entry/new", response_model=None)
 async def post_new_entry(
     request: Request,
     title: str = Form(...),
@@ -181,9 +181,8 @@ async def post_new_entry(
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
-            _ENTRY_FORM_TEMPLATE,
+            request, _ENTRY_FORM_TEMPLATE,
             {
-                "request": request,
                 "entry": None,
                 "action": "/entry/new",
                 "error": first_validation_error(exc),
@@ -224,8 +223,8 @@ async def get_entry(
         raise
 
     return templates.TemplateResponse(
-        _ENTRY_DETAIL_TEMPLATE,
-        {"request": request, "entry": entry},
+        request, _ENTRY_DETAIL_TEMPLATE,
+        {"entry": entry},
     )
 
 
@@ -258,16 +257,15 @@ async def get_edit_entry(
         raise
 
     return templates.TemplateResponse(
-        _ENTRY_FORM_TEMPLATE,
+        request, _ENTRY_FORM_TEMPLATE,
         {
-            "request": request,
             "entry": entry,
             "action": f"/entry/{entry_id}/edit",
         },
     )
 
 
-@router.post("/entry/{entry_id}/edit")
+@router.post("/entry/{entry_id}/edit", response_model=None)
 async def post_edit_entry(
     request: Request,
     entry_id: int,
@@ -302,9 +300,8 @@ async def post_edit_entry(
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
-            _ENTRY_FORM_TEMPLATE,
+            request, _ENTRY_FORM_TEMPLATE,
             {
-                "request": request,
                 "entry": None,
                 "action": f"/entry/{entry_id}/edit",
                 "error": first_validation_error(exc),

@@ -74,7 +74,7 @@ async def get_setup(request: Request, db: Session = Depends(get_db)) -> HTMLResp
     """
     if db.query(User).first():
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
-    return templates.TemplateResponse(_SETUP_TEMPLATE, {"request": request})
+    return templates.TemplateResponse(request, _SETUP_TEMPLATE)
 
 
 @router.post("/setup")
@@ -98,8 +98,8 @@ async def post_setup(
         SetupRequest(password=password, confirm_password=confirm_password)
     except ValidationError as exc:
         return templates.TemplateResponse(
-            _SETUP_TEMPLATE,
-            {"request": request, "error": first_validation_error(exc)},
+            request, _SETUP_TEMPLATE,
+            {"error": first_validation_error(exc)},
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
@@ -110,8 +110,8 @@ async def post_setup(
         # Expected service errors (e.g. HTTP 400 "Vault is already set up.").
         # Pass the detail through so the user sees the real reason.
         return templates.TemplateResponse(
-            _SETUP_TEMPLATE,
-            {"request": request, "error": exc.detail},
+            request, _SETUP_TEMPLATE,
+            {"error": exc.detail},
             status_code=exc.status_code,
         )
     except Exception:
@@ -119,8 +119,8 @@ async def post_setup(
         # traceback; return a generic message — no internals to the browser.
         logger.exception("Unexpected error during vault setup.")
         return templates.TemplateResponse(
-            _SETUP_TEMPLATE,
-            {"request": request, "error": "Setup failed. Please try again."},
+            request, _SETUP_TEMPLATE,
+            {"error": "Setup failed. Please try again."},
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -144,7 +144,7 @@ async def get_login(request: Request) -> HTMLResponse:
     """
     if request.session.get("encryption_key"):
         return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_302_FOUND)
-    return templates.TemplateResponse(_LOGIN_TEMPLATE, {"request": request})
+    return templates.TemplateResponse(request, _LOGIN_TEMPLATE)
 
 
 @router.post("/login")
@@ -164,8 +164,8 @@ async def post_login(
         LoginRequest(password=password)
     except ValidationError as exc:
         return templates.TemplateResponse(
-            _LOGIN_TEMPLATE,
-            {"request": request, "error": first_validation_error(exc)},
+            request, _LOGIN_TEMPLATE,
+            {"error": first_validation_error(exc)},
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
@@ -177,8 +177,8 @@ async def post_login(
         # (corrupt kdf_salt). Render a generic error for both.
         logger.warning("Login attempt failed.")
         return templates.TemplateResponse(
-            _LOGIN_TEMPLATE,
-            {"request": request, "error": "Invalid password."},
+            request, _LOGIN_TEMPLATE,
+            {"error": "Invalid password."},
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
