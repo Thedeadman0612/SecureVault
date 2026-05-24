@@ -132,7 +132,7 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 | `app/migrations/versions/9680c40ab116_initial_tables.py` | Alembic initial migration — creates `users` and `vault_entries` tables. Run: `alembic upgrade head` |
 | `app/security/hashing.py` | `hash_password(plain) -> str` (Argon2id PHC string) · `verify_password(plain, hash) -> bool` (catches `VerifyMismatchError`, propagates all others) |
 | `app/security/encryption.py` | `generate_kdf_salt() -> str` (32-byte CSPRNG, base64) · `derive_key(password, salt_b64) -> bytes` (PBKDF2HMAC SHA-256, 600k iters, salt-length guard) · `encrypt_field(value, raw_key) -> str` (Fernet token) · `decrypt_field(token, raw_key) -> str` (raises `InvalidToken` — re-exported for callers) |
-| `app/templates/` | All 6 HTML templates created: `base.html`, `login.html`, `setup.html`, `vault.html`, `entry_form.html`, `entry_detail.html` |
+| `app/templates/` | All 6 HTML templates fully implemented with Tailwind CSS: `base.html` (layout, blocks) · `login.html` + `setup.html` (centered auth cards, error alerts) · `vault.html` (entry table, empty state, entry count) · `entry_form.html` (shared create/edit form, show/hide password) · `entry_detail.html` (detail card, show/hide + copy password, delete confirm) |
 | `app/static/` | CSS and JS asset directories created |
 | `app/schemas/auth.py` | `SetupRequest` (password + confirm_password, min-length ≥12, match validator) · `LoginRequest` (password) · `MessageResponse` (message + success: bool = True) |
 | `app/schemas/vault.py` | `VaultEntryCreate` (title + password required, sensitive fields documented) · `VaultEntryUpdate` (all fields optional) · `VaultEntryResponse` (decrypted field names: `username`, `password`, `notes`; includes `id`, timestamps) |
@@ -140,14 +140,14 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 | `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all filter by user_id; encrypt on write, decrypt on read via `_decrypt_entry()`; `InvalidToken` → HTTP 500 |
 | `app/routes/auth.py` | `GET /setup` (redirect to /login if vault exists) · `POST /setup` (validate → setup_vault → **redirect to /login** 303) · `GET /login` (redirect to /vault if session active) · `POST /login` (login → redirect to /vault 303) · `POST /logout` (logout → redirect to /login 303) |
 | `app/routes/vault.py` | `GET /vault` (list entries) · `GET+POST /entry/new` · `GET /entry/{id}` · `GET+POST /entry/{id}/edit` · `POST /entry/{id}/delete` — all extract raw_key+user_id from session via `_session_context()`; empty form strings → None via `_none_if_empty()`; 404 → redirect to /vault |
+| `app/middleware/auth_guard.py` | `AuthGuard(BaseHTTPMiddleware)` — exempts `/login`, `/setup`, `/static/*`; checks `session["encryption_key"]`; redirects unauthenticated requests to `/login` with 302 |
+| `app/main.py` | FastAPI app; `StaticFiles` at `/static`; middleware stack (`AuthGuard` inner, `SessionMiddleware` outer); includes `auth` + `vault` routers; global 404 + 500 handlers; docs disabled |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
 Implement in this order (each layer depends on the one below):
 
 | File | What's needed |
-|---|---|
-| `app/middleware/auth_guard.py` | Starlette middleware — checks session for `encryption_key`, redirects to `/login` if missing; allows `/login`, `/setup`, `/static` through unauthenticated |
 | `app/routes/auth.py` | `GET/POST /setup`, `GET/POST /login`, `POST /logout` |
 | `app/routes/vault.py` | `GET /vault`, `GET/POST /entry/new`, `GET /entry/{id}`, `POST /entry/{id}/edit`, `POST /entry/{id}/delete` |
 | `app/main.py` | FastAPI app init, `SessionMiddleware`, `AuthGuard` middleware, Jinja2 templates, include routers |
