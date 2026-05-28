@@ -75,9 +75,12 @@ def _decrypt_entry(entry: VaultEntry, raw_key: bytes) -> VaultEntryResponse:
             if entry.notes_encrypted
             else None
         )
-    except InvalidToken:
+    except (InvalidToken, ValueError):
+        # InvalidToken: wrong key or tampered ciphertext.
+        # ValueError: decrypt_field() raises this when fernet_key is the wrong
+        # length (e.g. corrupt session or key derivation bug).
         logger.error(
-            "Decryption failed for entry id=%d — key mismatch or tampering.",
+            "Decryption failed for entry id=%d — key mismatch, tampering, or bad key length.",
             entry.id,
         )
         raise HTTPException(
@@ -132,7 +135,12 @@ def create_entry(
         notes_encrypted=encrypt_field(data.notes, raw_key) if data.notes else None,
     )
     db.add(entry)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("DB commit failed while creating vault entry for user id=%d.", user_id)
+        raise
     db.refresh(entry)
     logger.info("Created vault entry id=%d for user id=%d.", entry.id, user_id)
     return _decrypt_entry(entry, raw_key)
@@ -237,20 +245,32 @@ def update_entry(
     # Plaintext fields — update only when explicitly supplied.
     if data.title is not None:
         entry.title = data.title
+    # Nullable plaintext fields support clearing: "" means "remove this value"
+    # (store NULL), any non-empty string means "update to this value".
+    # None means "no change" (field was absent from the request / not edited).
     if data.website is not None:
-        entry.website = data.website
+        entry.website = data.website if data.website else None
     if data.category is not None:
-        entry.category = data.category
+        entry.category = data.category if data.category else None
 
     # Sensitive fields — re-encrypt before writing to DB.
     if data.username is not None:
         entry.username_encrypted = encrypt_field(data.username, raw_key)
     if data.password is not None:
         entry.password_encrypted = encrypt_field(data.password, raw_key)
+    # Nullable encrypted field: "" clears to NULL, non-empty updates, None no-ops.
     if data.notes is not None:
-        entry.notes_encrypted = encrypt_field(data.notes, raw_key)
+        if data.notes:
+            entry.notes_encrypted = encrypt_field(data.notes, raw_key)
+        else:
+            entry.notes_encrypted = None  # user explicitly cleared the notes field
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("DB commit failed while updating vault entry id=%d for user id=%d.", entry_id, user_id)
+        raise
     db.refresh(entry)
     logger.info("Updated vault entry id=%d for user id=%d.", entry.id, user_id)
     return _decrypt_entry(entry, raw_key)
@@ -286,5 +306,10 @@ def delete_entry(
         )
 
     db.delete(entry)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("DB commit failed while deleting vault entry id=%d for user id=%d.", entry_id, user_id)
+        raise
     logger.info("Deleted vault entry id=%d for user id=%d.", entry_id, user_id)

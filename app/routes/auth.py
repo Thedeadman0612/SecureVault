@@ -30,7 +30,6 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -38,12 +37,12 @@ from app.database.session import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, SetupRequest
 from app.services import auth_service
+from app.templates_config import templates
 from app.utils.helpers import first_validation_error
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 # Template name constants — avoids repeated string literals and makes
 # renames a one-line change.
@@ -172,14 +171,32 @@ async def post_login(
     # --- Service call ---
     try:
         auth_service.login(password, db, request.session)
-    except Exception:
-        # auth_service raises HTTPException 401 (wrong password) or 500
-        # (corrupt kdf_salt). Render a generic error for both.
-        logger.warning("Login attempt failed.")
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            # Wrong password or no vault — return identical generic message
+            # so the response does not reveal whether a vault exists.
+            logger.warning("Login attempt failed — invalid password.")
+            return templates.TemplateResponse(
+                request, _LOGIN_TEMPLATE,
+                {"error": "Invalid password."},
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
+        # HTTP 500 from derive_key() means kdf_salt is corrupt — a server
+        # error, not a credentials error. Returning 401 here would mask
+        # DB corruption and make it indistinguishable from a wrong password.
+        logger.error("Login failed due to server error: %s", exc.detail)
         return templates.TemplateResponse(
             request, _LOGIN_TEMPLATE,
-            {"error": "Invalid password."},
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            {"error": "Login failed due to a server error. Please contact support."},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    except Exception:
+        # Truly unexpected errors (e.g. DB unavailable).
+        logger.exception("Unexpected error during login.")
+        return templates.TemplateResponse(
+            request, _LOGIN_TEMPLATE,
+            {"error": "Login failed. Please try again."},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_303_SEE_OTHER)

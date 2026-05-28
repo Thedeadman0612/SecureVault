@@ -205,5 +205,10 @@ def decrypt_field(token: str, fernet_key: bytes) -> str:
     encoded_key: bytes = base64.urlsafe_b64encode(fernet_key)
     f = Fernet(encoded_key)
 
-    plaintext_bytes: bytes = f.decrypt(token.encode("ascii"))
+    # Use utf-8 (not ascii) so that a corrupt token containing non-ASCII bytes
+    # raises UnicodeDecodeError rather than being silently mis-encoded.
+    # The resulting bytes are passed straight to Fernet.decrypt() which will
+    # raise InvalidToken if the content is not a valid Fernet token — that
+    # exception is what callers expect to catch.
+    plaintext_bytes: bytes = f.decrypt(token.encode("utf-8"))
     return plaintext_bytes.decode("utf-8")

@@ -32,17 +32,25 @@ import base64
 import logging
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.user import User
 from app.security.encryption import derive_key, generate_kdf_salt
-from app.security.hashing import hash_password, verify_password
+from app.security.hashing import hash_password, needs_rehash, verify_password
 
 logger = logging.getLogger(__name__)
 
 # Shared 401 detail string — identical for "no user" and "wrong password"
 # so the response body does not reveal whether a vault exists.
 _INVALID_PASSWORD_MSG = "Invalid password."
+
+# Dummy hash used when no User row exists so that verify_password() always
+# runs its full Argon2id computation (~200 ms) regardless of whether a vault
+# has been set up. Without this, the "no user" path would return immediately,
+# allowing an attacker to detect vault existence via response-time difference.
+# The hash is generated once at module import time — not per-request.
+_DUMMY_HASH: str = hash_password("dummy-constant-for-timing-equalisation")
 
 
 def setup_vault(password: str, db: Session) -> User:
@@ -73,7 +81,17 @@ def setup_vault(password: str, db: Session) -> User:
         kdf_salt=generate_kdf_salt(),
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two near-simultaneous POST /setup requests can both pass the
+        # existence check before either commits (TOCTOU). The unique constraint
+        # on kdf_salt (or the single-row invariant) catches the second commit.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Vault is already set up.",
+        )
     db.refresh(user)
     logger.info("Vault initialised — user id=%d created.", user.id)
     return user
@@ -99,9 +117,14 @@ def login(password: str, db: Session, session: dict) -> None:
     """
     user = db.query(User).first()
 
-    # Evaluate "no user" and "wrong password" as the same outcome so both
-    # paths return an identical HTTP 401 with the same message.
-    if user is None or not verify_password(password, user.password_hash):
+    # Always run the full Argon2id verification to equalise timing between
+    # "no user" and "wrong password" — prevents vault-existence detection.
+    # When no user row exists, verify against _DUMMY_HASH (which will always
+    # fail) so we still pay the ~200 ms Argon2id cost before returning 401.
+    hash_to_check = user.password_hash if user is not None else _DUMMY_HASH
+    password_ok = verify_password(password, hash_to_check)
+
+    if user is None or not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=_INVALID_PASSWORD_MSG,
@@ -118,6 +141,21 @@ def login(password: str, db: Session, session: dict) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Login failed. Please contact support.",
         )
+
+    # Check whether the stored hash was produced with old Argon2 parameters.
+    # If argon2-cffi's defaults ever change (e.g. a new release bumps memory_cost),
+    # old hashes stored in the DB will lag behind. We silently upgrade the hash
+    # here — after we've already verified the plaintext password is correct —
+    # so future logins use the stronger parameters automatically.
+    if needs_rehash(user.password_hash):
+        user.password_hash = hash_password(password)
+        db.commit()
+        logger.info("Rehashed password for user id=%d — Argon2 parameters upgraded.", user.id)
+
+    # Clear any pre-existing session data before writing new keys.
+    # Prevents session fixation: an attacker who plants session data before
+    # login cannot have it merged with the newly authenticated session.
+    session.clear()
 
     # Store as URL-safe base64 string — Starlette sessions must be JSON-serialisable.
     # vault_service recovers raw bytes with base64.urlsafe_b64decode().

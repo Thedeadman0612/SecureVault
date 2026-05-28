@@ -22,6 +22,8 @@ further or switch to explicit Argon2id configuration.
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
+__all__ = ["hash_password", "verify_password", "needs_rehash"]
+
 # One shared PasswordHasher instance — stateless and safe to reuse.
 # Creating it at import time avoids per-call construction overhead.
 _hasher = PasswordHasher()
@@ -73,3 +75,25 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     except VerifyMismatchError:
         # Expected path for a wrong password — not an error, just a mismatch.
         return False
+
+
+def needs_rehash(hashed_password: str) -> bool:
+    """Return True if the stored hash was produced with outdated Argon2 parameters.
+
+    argon2-cffi's ``check_needs_rehash`` compares the parameters encoded in
+    the PHC hash string against the current PasswordHasher defaults. If they
+    differ (e.g. after an argon2-cffi upgrade bumps the default time_cost or
+    memory_cost), this returns True and the caller should re-hash and persist
+    the new hash.
+
+    Call this after a successful login — only re-hash when we can verify the
+    original plaintext password is correct, because rehashing requires it.
+
+    Args:
+        hashed_password: The PHC-format Argon2 hash stored in users.password_hash.
+
+    Returns:
+        True if the hash was computed with different parameters than the
+        current defaults and should be upgraded; False otherwise.
+    """
+    return _hasher.check_needs_rehash(hashed_password)

@@ -106,12 +106,16 @@ class TestVerifyPassword:
 
     def test_verify_does_not_raise_on_mismatch(self):
         """VerifyMismatchError must be swallowed — wrong password is not an
-        exception from the caller's perspective."""
+        exception from the caller's perspective.
+
+        The previous try/except pattern was fragile: the assertion lived inside
+        the except block, so the test would pass even if verify_password()
+        returned True for the wrong password (the assertion would never execute
+        in the happy path). The fix: call the function directly and assert the
+        return value unconditionally.
+        """
         hashed = hash_password("realpassword")
-        try:
-            result = verify_password("wrongpassword", hashed)
-        except Exception as exc:  # noqa: BLE001
-            pytest.fail(f"verify_password raised unexpectedly: {exc}")
+        result = verify_password("wrongpassword", hashed)  # must not raise
         assert result is False
 
     def test_malformed_hash_propagates_error(self):

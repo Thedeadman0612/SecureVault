@@ -35,25 +35,23 @@ ERROR HANDLING:
 """
 
 import base64
+import binascii
 import logging
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.schemas.vault import VaultEntryCreate, VaultEntryUpdate
 from app.services import vault_service
-from app.utils.helpers import first_validation_error, format_datetime, none_if_empty, truncate
+from app.templates_config import templates
+from app.utils.helpers import first_validation_error, none_if_empty
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
-templates.env.globals["format_datetime"] = format_datetime
-templates.env.filters["truncate_str"] = truncate
 
 # Template name constants.
 _VAULT_TEMPLATE        = "vault.html"
@@ -73,16 +71,32 @@ def _session_context(request: Request) -> tuple[bytes, int] | RedirectResponse:
     """Decode the encryption key and user_id from the session.
 
     Returns a (raw_key, user_id) tuple on success, or a RedirectResponse to
-    /login if either session key is absent (unauthenticated request).
+    /login if either session key is absent or cannot be decoded.
+
+    Failure modes handled:
+      - Missing key_b64 or user_id → unauthenticated; redirect to /login.
+      - Corrupt base64 in key_b64 → session tampered; clear + redirect to /login.
 
     Once auth_guard middleware is active this path will never be reached via
     normal browser navigation — it acts as a secondary safety net.
     """
     key_b64: str | None = request.session.get("encryption_key")
     user_id: int | None = request.session.get("user_id")
-    if not key_b64 or not user_id:
+    # Use `not key_b64` for the key (rejects None AND empty string — both invalid)
+    # but `user_id is None` for the id. `not user_id` would be falsy for user_id=0,
+    # incorrectly blocking a valid user. Phase 1 has id=1 so this is a safety net
+    # that matters most once multi-user (Phase 6) is added.
+    if not key_b64 or user_id is None:
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
-    return base64.urlsafe_b64decode(key_b64), int(user_id)
+    try:
+        raw_key = base64.urlsafe_b64decode(key_b64)
+    except (binascii.Error, ValueError):
+        # Session contains invalid base64 — possible tampering or corruption.
+        # Clear the session so the browser doesn't loop on every request.
+        logger.warning("Corrupt encryption_key in session — clearing and redirecting to /login.")
+        request.session.clear()
+        return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
+    return raw_key, int(user_id)
 
 
 
@@ -191,7 +205,23 @@ async def post_new_entry(
         )
 
     # --- Service call ---
-    vault_service.create_entry(data, user_id, raw_key, db)
+    try:
+        vault_service.create_entry(data, user_id, raw_key, db)
+    except Exception:
+        # Covers HTTPException 500 (decrypt-after-write failure) and any
+        # unexpected DB error (e.g. IntegrityError from db.commit()).
+        # Never propagate raw exceptions to the browser — show a safe message.
+        logger.exception("Failed to create vault entry for user id=%d.", user_id)
+        return templates.TemplateResponse(
+            request, _ENTRY_FORM_TEMPLATE,
+            {
+                "entry": None,
+                "action": "/entry/new",
+                "error": "Could not save entry. Please try again.",
+            },
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
     return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -289,20 +319,32 @@ async def post_edit_entry(
     raw_key, user_id = ctx
 
     # --- Schema validation ---
+    # Clearable nullable fields (website, category, notes) are passed as-is:
+    #   "" means "user cleared the field → set to NULL in DB"
+    #   any non-empty string means "user changed the value → update"
+    # Non-nullable / required fields (title, username, password) still use
+    # none_if_empty() so an unedited blank submission means "no change".
     try:
         data = VaultEntryUpdate(
             title=none_if_empty(title),
-            website=none_if_empty(website),
-            category=none_if_empty(category),
+            website=website,          # "" → clear; non-empty → update; None impossible from form
+            category=category,        # "" → clear; non-empty → update; None impossible from form
             username=none_if_empty(username),
             password=none_if_empty(password),
-            notes=none_if_empty(notes),
+            notes=notes,              # "" → clear; non-empty → update; None impossible from form
         )
     except ValidationError as exc:
+        # Re-fetch the existing entry so the edit form is pre-filled on
+        # validation error — passing entry=None would wipe all field values.
+        try:
+            existing = vault_service.get_entry(entry_id, user_id, raw_key, db)
+        except HTTPException:
+            # Entry vanished between GET and POST; redirect cleanly.
+            return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_302_FOUND)
         return templates.TemplateResponse(
             request, _ENTRY_FORM_TEMPLATE,
             {
-                "entry": None,
+                "entry": existing,
                 "action": f"/entry/{entry_id}/edit",
                 "error": first_validation_error(exc),
             },

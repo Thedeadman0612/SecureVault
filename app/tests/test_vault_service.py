@@ -21,6 +21,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.database.base import Base
 from app.models.user import User  # noqa: F401 — registers users table with Base.metadata
@@ -42,9 +43,14 @@ def db():
     starts with a completely empty database. Using scope="function" ensures
     there is no shared state between tests.
     """
+    # StaticPool forces all sessions to reuse the same underlying connection.
+    # Without it, each new session opens a fresh connection — and SQLite
+    # in-memory databases are per-connection, so the tables created by
+    # create_all() would be invisible to every subsequent session.
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)

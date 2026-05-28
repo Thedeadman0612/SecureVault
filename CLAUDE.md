@@ -145,38 +145,40 @@ Work is phased — do not implement Phase 2+ features during Phase 1:
 
 ---
 
-### Phase 1 — Status: 🟡 In Progress
+### Phase 1 — Status: ✅ Complete (including code-review hardening)
 
 #### ✅ Completed
 
 | File | What was done |
 |---|---|
-| `app/models/user.py` | `User` ORM model — `id`, `password_hash`, `kdf_salt`, `created_at`, `updated_at`, relationship to `VaultEntry` |
-| `app/models/vault_entry.py` | `VaultEntry` ORM model — `user_id` FK, plaintext fields (`title`, `website`, `category`), encrypted fields (`username_encrypted`, `password_encrypted`, `notes_encrypted`) |
-| `app/database/session.py` | SQLAlchemy engine, `SessionLocal`, `get_db` dependency |
+| `app/models/user.py` | `User` ORM model — `id`, `password_hash`, `kdf_salt` (unique), `created_at`, `updated_at`; typed `Mapped[list[VaultEntry]]` relationship with `cascade="all, delete-orphan"` and `passive_deletes=True` |
+| `app/models/vault_entry.py` | `VaultEntry` ORM model — `user_id` FK with `ondelete="CASCADE"` and `index=True`; plaintext fields (`title`, `website`, `category`); encrypted fields (`username_encrypted`, `password_encrypted`, `notes_encrypted`); typed `Mapped[User]` relationship |
+| `app/database/session.py` | SQLAlchemy engine, `SessionLocal`, `get_db` dependency; rollback on exception before close to prevent dirty connections returning to pool |
 | `app/config/settings.py` | Pydantic `BaseSettings` loading `SECRET_KEY`, `DATABASE_URL`, `SESSION_TIMEOUT_MINUTES` from `.env` |
-| `app/migrations/versions/9680c40ab116_initial_tables.py` | Alembic initial migration — creates `users` and `vault_entries` tables. Run: `alembic upgrade head` |
-| `app/security/hashing.py` | `hash_password(plain) -> str` (Argon2id PHC string) · `verify_password(plain, hash) -> bool` (catches `VerifyMismatchError`, propagates all others) |
-| `app/security/encryption.py` | `generate_kdf_salt() -> str` (32-byte CSPRNG, base64) · `derive_key(password, salt_b64) -> bytes` (PBKDF2HMAC SHA-256, 600k iters, salt-length guard) · `encrypt_field(value, raw_key) -> str` (Fernet token) · `decrypt_field(token, raw_key) -> str` (raises `InvalidToken` — re-exported for callers) |
-| `app/templates/` | All 6 HTML templates fully implemented with Tailwind CSS: `base.html` (layout, blocks) · `login.html` + `setup.html` (centered auth cards, error alerts) · `vault.html` (entry table, empty state, entry count) · `entry_form.html` (shared create/edit form, show/hide password) · `entry_detail.html` (detail card, show/hide + copy password, delete confirm) |
+| `app/migrations/versions/9680c40ab116_initial_tables.py` | Alembic initial migration — creates `users` and `vault_entries` tables |
+| `app/migrations/versions/61c78f942f62_add_cascade_delete_user_id_index_kdf_.py` | Alembic migration — adds `ON DELETE CASCADE` to `vault_entries.user_id` FK, index on `vault_entries.user_id`, and `UNIQUE` constraint on `users.kdf_salt` |
+| `app/security/hashing.py` | `hash_password(plain) -> str` (Argon2id PHC string) · `verify_password(plain, hash) -> bool` · `needs_rehash(hash) -> bool` — checks if stored hash parameters are outdated so login can silently upgrade them |
+| `app/security/encryption.py` | `generate_kdf_salt()` · `derive_key()` · `encrypt_field()` · `decrypt_field()` — uses `utf-8` (not `ascii`) encoding in `decrypt_field` so corrupt non-ASCII tokens raise `InvalidToken` rather than `UnicodeEncodeError`; `InvalidToken` re-exported |
+| `app/templates/` | All 6 HTML templates fully implemented with Tailwind CSS: `base.html` (layout, UTC→local JS converter) · `login.html` + `setup.html` · `vault.html` · `entry_form.html` · `entry_detail.html` |
+| `app/templates_config.py` | Centralised `Jinja2Templates` instance with absolute path (`Path(__file__).parent / "templates"`); registers `format_datetime` global and `truncate_str` filter; imported by both route modules so env mutations apply everywhere |
 | `app/static/` | CSS and JS asset directories created |
-| `app/schemas/auth.py` | `SetupRequest` (password + confirm_password, min-length ≥12, match validator) · `LoginRequest` (password) · `MessageResponse` (message + success: bool = True) |
-| `app/schemas/vault.py` | `VaultEntryCreate` (title + password required, sensitive fields documented) · `VaultEntryUpdate` (all fields optional) · `VaultEntryResponse` (decrypted field names: `username`, `password`, `notes`; includes `id`, timestamps) |
-| `app/services/auth_service.py` | `setup_vault(password, db)` — Argon2id hash + KDF salt + create User row (rejects if user exists) · `login(password, db, session)` — verify hash, derive key, store base64 key + user_id in session · `logout(session)` — session.clear() |
-| `app/services/vault_service.py` | `create_entry`, `get_entries`, `get_entry`, `update_entry`, `delete_entry` — all filter by user_id; encrypt on write, decrypt on read via `_decrypt_entry()`; `InvalidToken` → HTTP 500 |
-| `app/routes/auth.py` | `GET /setup` (redirect to /login if vault exists) · `POST /setup` (validate → setup_vault → **redirect to /login** 303) · `GET /login` (redirect to /vault if session active) · `POST /login` (login → redirect to /vault 303) · `POST /logout` (logout → redirect to /login 303) |
-| `app/routes/vault.py` | `GET /vault` (list entries) · `GET+POST /entry/new` · `GET /entry/{id}` · `GET+POST /entry/{id}/edit` · `POST /entry/{id}/delete` — all extract raw_key+user_id from session via `_session_context()`; empty form strings → None via `none_if_empty()` (from helpers); 404 → redirect to /vault |
+| `app/schemas/auth.py` | `SetupRequest` (password + confirm_password, min-length ≥12, match validator) · `LoginRequest` (password) · `MessageResponse` |
+| `app/schemas/vault.py` | `VaultEntryCreate` · `VaultEntryUpdate` (documents `""` = clear-to-NULL / `None` = no-change convention for nullable fields) · `VaultEntryResponse` |
+| `app/services/auth_service.py` | `setup_vault()` — Argon2id hash + KDF salt; IntegrityError catch for TOCTOU safety · `login()` — timing-safe dummy hash when no user exists (prevents vault-existence detection); `session.clear()` before writing keys (session fixation); `needs_rehash` check with silent re-hash; explicit `HTTPException` branching (401 vs 500) · `logout()` — session.clear() |
+| `app/services/vault_service.py` | Full vault CRUD filtering by `user_id`; encrypt on write, decrypt on read; `_decrypt_entry` catches `(InvalidToken, ValueError)`; `db.rollback()` on commit failure in create/update/delete; nullable-field clearing (`""` → NULL) in `update_entry` |
+| `app/routes/auth.py` | All auth routes; uses shared `templates_config.templates`; `POST /login` catches `HTTPException` explicitly — HTTP 500 from corrupt kdf_salt is no longer masked as 401 |
+| `app/routes/vault.py` | Full vault CRUD routes; uses shared `templates_config.templates`; `_session_context()` — `user_id is None` check (not falsy), corrupt base64 clears session and redirects; edit `ValidationError` re-fetches entry so form stays pre-filled; `create_entry` wrapped in exception handler; nullable-field clearing passed through |
 | `app/middleware/auth_guard.py` | `AuthGuard(BaseHTTPMiddleware)` — exempts `/login`, `/setup`, `/static/*`; checks `session["encryption_key"]`; redirects unauthenticated requests to `/login` with 302 |
 | `app/main.py` | FastAPI app; `StaticFiles` at `/static`; middleware stack (`AuthGuard` inner, `SessionMiddleware` outer); includes `auth` + `vault` routers; global 404 + 500 handlers; docs disabled |
-| `app/utils/helpers.py` | `first_validation_error(exc) -> str` — strips Pydantic v2 "Value error, " prefix · `none_if_empty(value) -> str \| None` — converts `""` / whitespace → None for HTML form fields |
-| `app/tests/test_hashing.py` | Unit tests for `hash_password` and `verify_password` — output format, uniqueness (salting), correct/wrong/empty/unicode passwords, malformed/corrupted hash propagation, strict `bool` return type |
-| `app/tests/test_encryption.py` | Unit tests for all four encryption functions + `InvalidToken` re-export — salt format/uniqueness, key derivation determinism and length, Fernet token format and random IV, encrypt/decrypt roundtrip, wrong-key and tampered-token `InvalidToken`, wrong-length key/salt `ValueError` |
-| `app/tests/test_vault_service.py` | Integration tests for vault CRUD with in-memory SQLite — create/read/update/delete, encryption-on-write and decryption-on-read, `None` notes, user isolation across all operations, `InvalidToken` → HTTP 500 for tampered ciphertext or wrong key |
-| `app/tests/test_auth_routes.py` | Full-stack integration tests via `TestClient` (in-memory DB, full middleware) — `GET`/`POST /setup`, `GET`/`POST /login`, `POST /logout`; redirect behaviour, validation errors, duplicate setup, session state after login/logout, no-vault 401, identical error message for user-enumeration resistance |
+| `app/utils/helpers.py` | `first_validation_error` · `none_if_empty` · `utcnow` · `format_datetime` · `truncate` |
+| `app/tests/test_hashing.py` | Unit tests for `hash_password` and `verify_password`; `test_verify_does_not_raise_on_mismatch` fixed to assert return value directly (was fragile try/except) |
+| `app/tests/test_encryption.py` | Unit tests for all four encryption functions + `InvalidToken` re-export |
+| `app/tests/test_vault_service.py` | Integration tests for vault CRUD with in-memory SQLite; `db` fixture now uses `poolclass=StaticPool` so `create_all()` tables are visible to all test sessions |
+| `app/tests/test_auth_routes.py` | Full-stack integration tests via `TestClient` (in-memory DB, full middleware stack) — all auth routes, session state, redirect behaviour, user-enumeration resistance |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
-_None — all Phase 1 files are implemented._ 🎉
+_None — all Phase 1 files are implemented and hardened._ 🎉
 
 #### 🔑 Key Implementation Notes for Remaining Work
 

@@ -70,11 +70,17 @@ class VaultEntryCreate(BaseModel):
 class VaultEntryUpdate(BaseModel):
     """Validated request body for POST /entry/{id}/edit.
 
-    Every field is optional so callers can supply only what changed. The vault
-    service applies the update by merging non-None values onto the existing
-    ORM row.
+    Every field is optional so callers can supply only what changed.
 
-    The vault service must re-encrypt any sensitive field that is supplied
+    Conventions for the nullable optional fields (website, category, notes):
+      None   — absent from the request; field is NOT updated (no-op).
+      ""     — user explicitly cleared the field; vault_service sets it to NULL.
+      <str>  — update the field to this value.
+
+    Non-nullable fields (title, username, password) use None for no-op; empty
+    string is rejected by the field validators.
+
+    The vault service re-encrypts any sensitive field that is supplied
     (username, password, notes). Fields left as None are not written.
     """
 
