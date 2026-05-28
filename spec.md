@@ -89,16 +89,18 @@ Avoid:
 | Testing | pytest |
 | Package Manager | pip / uv |
 | Deployment (later) | Docker |
-| Mobile — PWA (Phase 7A) | `manifest.json` + Service Worker |
-| Mobile — API Auth (Phase 7B) | `python-jose` (JWT) |
-| Mobile — Android client (Phase 7B) | Flutter (Dart) |
+| AI Integration (Phase 6) | `anthropic` Python SDK (Claude API) |
+| Breach Detection (Phase 6) | HaveIBeenPwned REST API |
+| Mobile — PWA (Phase 8) | `manifest.json` + Service Worker |
+| Mobile — API Auth (Phase 9) | `python-jose` (JWT) |
+| Mobile — Android client (Phase 9) | Flutter (Dart) |
 
 ---
 
 ## High-Level System Architecture
 
 ```
-Browser (HTML)          Android App (Phase 7B)
+Browser (HTML)          Android App (Phase 9)
      ↓                          ↓
      ↓              /api/v1/ (JSON + JWT)
      ↓                          ↓
@@ -613,7 +615,46 @@ Requirements:
 - Container smoke test: app responds to HTTP requests after `docker-compose up`
 - CI pipeline passes cleanly on a fresh runner with no cached state
 
-### Phase 6 — Multi-User Support
+### Phase 6 — GenAI Integration
+
+**Goal:** Add AI-powered security intelligence to the vault while keeping all sensitive data strictly local. The Claude API is used to analyse metadata only — decrypted passwords, usernames, and notes are never sent to any external service.
+
+> **Critical security constraint:** Only plaintext metadata (`title`, `website`, `category`, password complexity metrics, timestamps) may be transmitted to the Claude API. Decrypted passwords, usernames, notes, encryption keys, and session tokens must never leave the local machine.
+
+Requirements:
+- Add `app/services/ai_service.py` — Anthropic Claude API client; metadata extraction helpers that strip sensitive fields before any API call; all AI feature functions; must never accept raw password/username/notes as a parameter
+- Add `app/routes/ai.py` — thin route handlers delegating to `ai_service`
+- Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` to `.env` and `app/config/settings.py`
+
+**Features:**
+
+| Feature | Endpoint | Description |
+|---|---|---|
+| 6.1 Password Strength Analyzer | `GET /vault/analyze` | Sends metadata only to Claude; returns prioritised recommendations (reused passwords by length+complexity match, stale passwords ≥6 months, weak by metrics, incomplete entries); dashboard button + modal |
+| 6.2 Security Audit Assistant | `GET /vault/audit` | Full vault security score 0–100; score breakdown (strength, age, reuse, coverage); prioritised action list |
+| 6.3 Smart Entry Assistant | `POST /entry/smart-fill` | User pastes any text; Claude extracts title, website, username, category; pre-fills add-entry form; user reviews before saving |
+| 6.4 Auto-categorization | (inline, new-entry form) | Real-time category suggestion when user types title + website; shown as clickable chip; accepted or ignored |
+| 6.5 Natural Language Vault Search | `GET /vault/search?q=` | Claude interprets free-text query and maps to entry filters (e.g. "streaming services" → Netflix/Spotify) |
+| 6.6 Breach Detection | `GET /vault/breach-check` | Checks website domain names (never passwords) against HaveIBeenPwned API; results cached 24 h per domain; breach badges on dashboard |
+
+**Deliverable:** AI-enhanced vault dashboard with local-first security intelligence and zero sensitive-data leakage.
+
+**Success Criteria:**
+- [ ] `/vault/analyze` returns recommendations without sending any decrypted field to the Claude API (verified by inspecting outbound payloads in tests)
+- [ ] `/entry/smart-fill` pre-fills the form correctly from pasted unstructured text
+- [ ] `/vault/breach-check` returns breach status for vault domains; no credentials are included in the HIBP request
+- [ ] All AI routes return a graceful error message (not a 500) when `ANTHROPIC_API_KEY` is missing or the API is unreachable
+- [ ] `ai_service.py` contains no function signature that accepts `password`, `username`, or `notes` as a parameter
+
+**Test Focus:**
+- Metadata extraction helper strips encrypted fields — assert output dict contains no `*_encrypted` keys and no raw plaintext credentials
+- Claude API client is called with a payload containing only safe fields (mock the API; assert request body)
+- Natural language search maps sample queries to the correct entry filters
+- Breach check result is cached — assert the HIBP API is called only once for repeated requests within 24 h
+
+---
+
+### Phase 7 — Multi-User Support
 
 **Goal:** Extend the vault to support multiple independent users, each with their own isolated encrypted vault.
 
@@ -639,17 +680,9 @@ Requirements:
 - Each user's encrypted data is decryptable only with their own key
 - Registration validation rejects duplicate usernames and weak passwords
 
-### Phase 7 — Mobile Support (PWA + Android)
+### Phase 8 — Mobile PWA
 
-**Goal:** Make SecureVault accessible on Android devices — first as an installable Progressive Web App, then as a native Android client backed by a JSON REST API.
-
-This phase is split into two independent sub-phases that can be delivered separately.
-
----
-
-#### Phase 7A — Progressive Web App (PWA)
-
-**Goal:** Make the existing web UI installable on Android's home screen with offline asset caching, requiring no new backend code.
+**Goal:** Make SecureVault accessible on Android devices as an installable Progressive Web App, requiring no new backend code.
 
 Requirements:
 - Add `app/static/manifest.json` — app name, short name, icons (192×192 and 512×512 PNG), theme colour, `display: standalone`
@@ -657,6 +690,8 @@ Requirements:
 - Link manifest and register the service worker in `base.html`
 - Add `<meta name="mobile-web-app-capable">` and `<meta name="apple-mobile-web-app-capable">` to `base.html`
 - Audit and fix any responsive layout issues at 375px–430px viewport widths
+- Mobile-first Tailwind CSS breakpoints; touch-friendly targets ≥44×44 px; responsive table → card layout on small screens
+- Paginate vault entries (10 per page)
 
 **Deliverable:** SecureVault installable via "Add to Home Screen" on Android Chrome; opens in standalone mode without browser chrome.
 
@@ -675,11 +710,11 @@ Requirements:
 
 ---
 
-#### Phase 7B — Native Android Client
+### Phase 9 — Native Android Client
 
 **Goal:** Build a native Android app (Flutter recommended) that communicates with SecureVault via a new JSON REST API, using JWT authentication instead of browser session cookies.
 
-**Prerequisite:** Phase 6 (multi-user) must be complete — a single-user vault has limited value as a networked app.
+**Prerequisites:** Phase 7 (multi-user) must be complete — a single-user vault has limited value as a networked app. Phase 5 (Docker/deployment) and an HTTPS certificate are also required.
 
 **Backend changes required:**
 
@@ -692,8 +727,9 @@ Requirements:
 | `POST /api/v1/refresh` | Accepts a refresh token, returns a new access token |
 | `POST /api/v1/logout` | Invalidates the refresh token |
 | `app/middleware/auth_guard.py` | Extend to accept `Authorization: Bearer <token>` for `/api/v1/*` routes alongside the existing session cookie check for HTML routes |
+| `app/main.py` | CORS configuration for mobile clients |
 
-**Android client (new top-level directory `android/`):**
+**Mobile client (new top-level directory `mobile/`):**
 
 | Component | Detail |
 |---|---|
@@ -784,10 +820,11 @@ Claude Code should:
 
 - browser extension or password autofill
 - cloud sync or remote storage
-- multi-user support (planned for Phase 6)
-- mobile application (PWA planned for Phase 7A; native Android client planned for Phase 7B)
+- AI features beyond metadata analysis (no sending of decrypted vault data to any external API — ever)
+- multi-user support (planned for Phase 7)
+- mobile application (PWA planned for Phase 8; native Android client planned for Phase 9)
 - OAuth or SSO login
-- biometric authentication (considered for Phase 7B Android client only)
+- biometric authentication (considered for Phase 9 Android client only)
 - zero-knowledge cloud architecture
 - enterprise features
 
