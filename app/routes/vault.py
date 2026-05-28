@@ -35,7 +35,6 @@ ERROR HANDLING:
 """
 
 import base64
-import binascii
 import logging
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -61,6 +60,7 @@ _ENTRY_DETAIL_TEMPLATE = "entry_detail.html"
 # Redirect URL constants.
 _VAULT_URL = "/vault"
 _LOGIN_URL = "/login"
+_NEW_ENTRY_PATH = "/entry/new"
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ def _session_context(request: Request) -> tuple[bytes, int] | RedirectResponse:
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
     try:
         raw_key = base64.urlsafe_b64decode(key_b64)
-    except (binascii.Error, ValueError):
+    except ValueError:
         # Session contains invalid base64 — possible tampering or corruption.
         # Clear the session so the browser doesn't loop on every request.
         logger.warning("Corrupt encryption_key in session — clearing and redirecting to /login.")
@@ -158,7 +158,7 @@ async def get_new_entry(request: Request) -> HTMLResponse:
 
     return templates.TemplateResponse(
         request, _ENTRY_FORM_TEMPLATE,
-        {"entry": None, "action": "/entry/new"},
+        {"entry": None, "action": _NEW_ENTRY_PATH},
     )
 
 
@@ -198,7 +198,7 @@ async def post_new_entry(
             request, _ENTRY_FORM_TEMPLATE,
             {
                 "entry": None,
-                "action": "/entry/new",
+                "action": _NEW_ENTRY_PATH,
                 "error": first_validation_error(exc),
             },
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -216,7 +216,7 @@ async def post_new_entry(
             request, _ENTRY_FORM_TEMPLATE,
             {
                 "entry": None,
-                "action": "/entry/new",
+                "action": _NEW_ENTRY_PATH,
                 "error": "Could not save entry. Please try again.",
             },
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

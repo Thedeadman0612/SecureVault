@@ -184,7 +184,7 @@ async def post_login(
         # HTTP 500 from derive_key() means kdf_salt is corrupt — a server
         # error, not a credentials error. Returning 401 here would mask
         # DB corruption and make it indistinguishable from a wrong password.
-        logger.error("Login failed due to server error: %s", exc.detail)
+        logger.exception("Login failed due to server error: %s", exc.detail)
         return templates.TemplateResponse(
             request, _LOGIN_TEMPLATE,
             {"error": "Login failed due to a server error. Please contact support."},
