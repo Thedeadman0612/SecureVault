@@ -92,7 +92,7 @@ Browser → FastAPI route handler → Auth middleware check
 | `app/services/` | Business logic: auth service, vault CRUD service |
 | `app/services/ai_service.py` | Anthropic Claude API client; metadata-only AI features; metadata extraction helpers — never accepts raw password/username as a parameter (Phase 6) |
 | `app/security/` | Encryption service (Fernet wrap/unwrap), key derivation, password hashing |
-| `app/security/tokens.py` | JWT access + refresh token generation and verification via `python-jose` (Phase 9) |
+| `app/security/tokens.py` | JWT access + refresh token generation and verification via `PyJWT` (Phase 9) |
 | `app/models/` | SQLAlchemy ORM models (`User`, `VaultEntry`) |
 | `app/schemas/` | Pydantic request/response schemas |
 | `app/database/` | SQLAlchemy engine, session factory, `get_db` dependency |
@@ -220,11 +220,16 @@ except ValueError:
 | File / Area | What's needed |
 |---|---|
 | `app/middleware/csrf.py` | CSRF protection middleware (`starlette-csrf` or double-submit cookie pattern) |
-| `app/middleware/rate_limit.py` | Login rate limiting + lockout (`slowapi` or manual attempt counter with lockout) |
-| `app/security/encryption.py` | Upgrade to AES-256-GCM; retain Fernet decrypt path for migrating existing entries |
+| `app/middleware/rate_limit.py` | Login rate limiting + lockout (`slowapi` with `InMemoryLimiter` — no Redis dependency; or manual SQLite-backed attempt counter) |
+| `app/security/encryption.py` | Add AES-256-GCM encrypt/decrypt alongside Fernet; keep Fernet decrypt **permanently** — legacy entries are never force-migrated all at once |
 | `app/security/encryption.py` | Replace PBKDF2HMAC key derivation with Argon2id |
+| `app/models/vault_entry.py` | Add `encryption_version` column (default `"fernet"`; set to `"aesgcm"` after re-encryption) — lets the service layer choose the right algorithm per entry |
+| `app/migrations/` | New Alembic migration for `encryption_version` column (schema only — no data touched) |
+| `app/services/vault_service.py` | Lazy re-encryption on read: if `entry.encryption_version == "fernet"` → decrypt with Fernet → re-encrypt with AES-GCM → save → set `encryption_version = "aesgcm"`; happens transparently while the key is already in session |
 | `app/main.py` | Set `https_only=True` and `same_site='strict'` on `SessionMiddleware` for production; add environment check to allow `https_only=False` in local dev only; reduce `SESSION_TIMEOUT_MINUTES` default to 10 |
 | `app/main.py` | Wire CSRF middleware into middleware stack |
+
+> ⚠️ **Re-encryption cannot run in Alembic** — the encryption key only exists in session memory after login and must never touch disk. Alembic adds the `encryption_version` column only. The actual re-encryption is a lazy per-entry operation in `vault_service` at first read after upgrade. All read/write paths must check `encryption_version` and call the correct algorithm.
 
 ---
 
@@ -232,8 +237,8 @@ except ValueError:
 
 | File / Area | What's needed |
 |---|---|
-| `app/routes/vault.py` | Search by title/website; category filter query params |
-| `app/services/vault_service.py` | `search_entries()` — filter on plaintext fields only; never decrypt to search |
+| `app/routes/vault.py` | Title/website text search and category filtering as query params on `GET /vault` (e.g. `?q=github&category=Work`) — no separate search route; keeps the dashboard URL canonical and avoids conflict with Phase 6's AI search endpoint |
+| `app/services/vault_service.py` | `search_entries()` — filter on plaintext fields only (`title`, `website`, `category`); never decrypt to search |
 | `app/templates/vault.html` | Search bar; category filter dropdown; dark mode toggle |
 | `app/templates/entry_form.html` | Password generator button; password strength indicator |
 | `app/static/js/` | Clipboard auto-clear after configurable timeout; dark mode persistence (localStorage); password generator logic |
@@ -279,12 +284,14 @@ except ValueError:
 | `app/routes/ai.py` | Thin route handlers for all AI features, delegating to `ai_service` |
 | `app/config/settings.py` | Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` settings |
 | `.env` | Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` variables |
-| **6.1 Password Strength Analyzer** | `GET /vault/analyze` — extract metadata only, send to Claude API, return prioritised recommendations (reused passwords by length+complexity match, stale passwords ≥6 months, weak passwords by metrics, incomplete entries); "Analyze Vault" button on dashboard; results in security report modal |
+| **6.1 Password Strength Analyzer** | `GET /vault/analyze` — extract metadata only, send to Claude API, return prioritised recommendations (potential reuse indicators flagged by same length + complexity metrics — approximation only, actual reuse detection requires comparing passwords which is forbidden; stale passwords ≥6 months; weak by metrics; incomplete entries); "Analyze Vault" button on dashboard; results in security report modal |
 | **6.2 Security Audit Assistant** | `GET /vault/audit` page — full vault security score 0–100; score breakdown (strength, age, reuse, coverage); prioritised action list |
 | **6.3 Smart Entry Assistant** | `POST /entry/smart-fill` — user pastes any text; Claude extracts title, website, username, category; pre-fills add-entry form; user reviews before saving; "Smart Fill" button on `entry_form.html` |
 | **6.4 Auto-categorization** | Real-time category suggestion when user types title + website; shown as clickable chip below category field; accepted or ignored by user; common categories: Work, Personal, Banking, Social, Entertainment, Shopping, Development |
-| **6.5 Natural Language Vault Search** | `GET /vault/search?q=` — Claude interprets free-text query and maps to entry filters (e.g. "streaming services" → Netflix/Spotify; "old passwords" → entries not updated in 1 year) |
-| **6.6 Breach Detection Assistant** | `GET /vault/breach-check` — checks website domain names (never passwords) against HaveIBeenPwned API; breach warning badges on dashboard; response cached for 24 hours per domain |
+| **6.5 Natural Language Vault Search** | `GET /vault/ai-search?q=` — deliberately separate from Phase 3's text search on `GET /vault?q=`; Claude interprets free-text query and maps to entry filters (e.g. "streaming services" → Netflix/Spotify; "old passwords" → entries not updated in 1 year); cache responses keyed on the query string for 5 minutes in-memory to avoid duplicate API calls on repeated searches |
+| **6.6 Breach Detection Assistant** | `GET /vault/breach-check` — checks website domain names (never passwords) against HaveIBeenPwned API; breach warning badges on dashboard; results cached in a `breach_cache(domain, is_breached, checked_at)` SQLite table for 24 hours — survives server restarts unlike in-memory cache |
+| `app/models/breach_cache.py` | `BreachCache` ORM model — `domain`, `is_breached`, `checked_at`; TTL check in `ai_service` (re-fetch if `checked_at` > 24 h ago) |
+| `app/migrations/` | New Alembic migration for `breach_cache` table |
 
 ---
 
@@ -336,10 +343,12 @@ except ValueError:
 |---|---|
 | `app/routes/api.py` | New router: `/api/v1/` JSON endpoints mirroring all HTML routes (vault CRUD + auth) |
 | `app/schemas/api.py` | JSON request/response schemas for the REST API |
-| `app/security/tokens.py` | JWT access + refresh token generation and verification (`python-jose`) |
-| `app/routes/auth.py` | Add `POST /api/v1/login` → returns JWT; `POST /api/v1/logout` → blacklist/expire token |
+| `app/security/tokens.py` | JWT access + refresh token generation and verification (`PyJWT` — prefer over `python-jose` which has had CVEs and is less actively maintained) |
+| `app/routes/auth.py` | Add `POST /api/v1/login` → returns `{access_token, refresh_token}`; `POST /api/v1/logout` → revoke refresh token (mark JTI as revoked in `revoked_tokens` table); access tokens expire naturally after short TTL (15 min) — do not blacklist access tokens per-request |
+| `app/models/revoked_token.py` | `RevokedToken` ORM model — stores revoked refresh token JTIs with expiry timestamp; checked only on token refresh, not on every API request |
+| `app/migrations/` | New Alembic migration for `revoked_tokens` table |
 | `app/middleware/auth_guard.py` | Extend to accept `Authorization: Bearer <token>` on `/api/v1/*` routes |
-| `app/main.py` | CORS configuration for mobile clients |
+| `app/main.py` | CORS configuration — required for browser-based clients (PWA or future React SPA served from a different origin); native Flutter HTTP calls do not need CORS but including it is harmless and future-proofs the API |
 | `mobile/` | Flutter project — consumes `/api/v1/`; native biometric auth (flutter_local_auth); secure storage (iOS Keychain / Android Keystore via flutter_secure_storage); auto-lock when app backgrounds; push notifications for breach alerts |
 
 ---

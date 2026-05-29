@@ -92,7 +92,7 @@ Avoid:
 | AI Integration (Phase 6) | `anthropic` Python SDK (Claude API) |
 | Breach Detection (Phase 6) | HaveIBeenPwned REST API |
 | Mobile — PWA (Phase 8) | `manifest.json` + Service Worker |
-| Mobile — API Auth (Phase 9) | `python-jose` (JWT) |
+| Mobile — API Auth (Phase 9) | `PyJWT` (JWT — preferred over `python-jose` which has had CVEs and is less actively maintained) |
 | Mobile — Android client (Phase 9) | Flutter (Dart) |
 
 ---
@@ -517,10 +517,14 @@ Requirements:
 - stronger input validation
 - improved session handling (secure cookies, HttpOnly, SameSite)
 - CSRF protection
-- login rate limiting / lockout
+- login rate limiting / lockout — use `slowapi` with `InMemoryLimiter` (no Redis dependency) or a SQLite-backed attempt counter
 - improved key derivation (Argon2id)
-- upgrade encryption to AES-256-GCM
+- upgrade encryption to AES-256-GCM for all **new** writes; keep Fernet decrypt path permanently for legacy entries
+- add `encryption_version` column to `vault_entries` (default `"fernet"`; updated to `"aesgcm"` after re-encryption)
+- lazy re-encryption at read time: when a logged-in user reads a Fernet entry, decrypt it, re-encrypt with AES-GCM, save, and update `encryption_version` — the encryption key is already in session so no extra auth is needed
 - secure error handling (no stack traces in responses)
+
+> **Important:** Re-encryption cannot run inside an Alembic migration — the encryption key only exists in session memory after login and must never touch disk. Alembic adds the `encryption_version` column only (schema change). The data migration is a transparent lazy operation inside the service layer.
 
 **Deliverable:** Security-improved application.
 
@@ -528,7 +532,8 @@ Requirements:
 - [ ] Login is rate-limited; repeated failures trigger a lockout or delay
 - [ ] CSRF tokens are required and validated on all state-changing routes
 - [ ] Session cookies are `HttpOnly`, `Secure`, and `SameSite=Strict`
-- [ ] AES-256-GCM replaces Fernet for all new encryptions
+- [ ] All new vault writes use AES-256-GCM; existing Fernet entries are re-encrypted lazily on first read
+- [ ] `encryption_version` column correctly reflects the algorithm used for each entry
 - [ ] No stack traces or internal error details are ever exposed in the browser
 
 **Test Focus:**
@@ -536,13 +541,15 @@ Requirements:
 - Requests without a valid CSRF token are rejected with 403
 - AES-256-GCM encrypt/decrypt round-trip
 - Argon2id key derivation produces a consistent, usable key
+- Lazy migration: reading a `"fernet"` entry updates `encryption_version` to `"aesgcm"` and the ciphertext is valid AES-GCM afterwards
+- Both algorithms decrypt their own ciphertext correctly; cross-decryption fails with `InvalidToken`
 
 ### Phase 3 — UX Improvements
 
 **Goal:** Improve usability.
 
 Requirements:
-- search and category filtering
+- title/website text search and category filtering as query params on `GET /vault` (e.g. `?q=github&category=Work`) — no separate search route; `GET /vault/search` is reserved for Phase 6's AI-powered search
 - password generator
 - dark mode
 - responsive layout improvements
@@ -553,14 +560,16 @@ Requirements:
 **Deliverable:** User-friendly vault UI.
 
 **Success Criteria:**
-- [ ] Search by title and website returns correctly filtered results
-- [ ] Category filter works independently and combined with search
+- [ ] `GET /vault?q=github` returns entries whose title or website contains "github"
+- [ ] `GET /vault?category=Work` returns only Work-category entries
+- [ ] Both filters combined (`?q=...&category=...`) work correctly
 - [ ] Password generator produces a configurable-length, random password
 - [ ] Copied passwords are cleared from the clipboard after the configured timeout
 - [ ] Dark mode toggle persists across page navigations
 
 **Test Focus:**
-- Search filtering logic (title match, website match, no results case)
+- Search filtering logic on `GET /vault?q=` (title match, website match, no results case)
+- Category filter works independently and combined with `?q=`
 - Password generator meets length and character-set requirements
 - Clipboard auto-clear fires after the configured timeout
 
@@ -630,12 +639,12 @@ Requirements:
 
 | Feature | Endpoint | Description |
 |---|---|---|
-| 6.1 Password Strength Analyzer | `GET /vault/analyze` | Sends metadata only to Claude; returns prioritised recommendations (reused passwords by length+complexity match, stale passwords ≥6 months, weak by metrics, incomplete entries); dashboard button + modal |
+| 6.1 Password Strength Analyzer | `GET /vault/analyze` | Sends metadata only to Claude; returns prioritised recommendations (potential reuse indicators flagged by same length + complexity metrics — approximation only, actual reuse detection requires comparing passwords which is forbidden; stale passwords ≥6 months; weak by metrics; incomplete entries); dashboard button + modal |
 | 6.2 Security Audit Assistant | `GET /vault/audit` | Full vault security score 0–100; score breakdown (strength, age, reuse, coverage); prioritised action list |
 | 6.3 Smart Entry Assistant | `POST /entry/smart-fill` | User pastes any text; Claude extracts title, website, username, category; pre-fills add-entry form; user reviews before saving |
 | 6.4 Auto-categorization | (inline, new-entry form) | Real-time category suggestion when user types title + website; shown as clickable chip; accepted or ignored |
-| 6.5 Natural Language Vault Search | `GET /vault/search?q=` | Claude interprets free-text query and maps to entry filters (e.g. "streaming services" → Netflix/Spotify) |
-| 6.6 Breach Detection | `GET /vault/breach-check` | Checks website domain names (never passwords) against HaveIBeenPwned API; results cached 24 h per domain; breach badges on dashboard |
+| 6.5 Natural Language Vault Search | `GET /vault/ai-search?q=` | Deliberately separate from Phase 3's text search on `GET /vault?q=`; Claude interprets free-text query and maps to entry filters (e.g. "streaming services" → Netflix/Spotify); responses cached in-memory keyed on query string for 5 minutes to avoid duplicate API calls |
+| 6.6 Breach Detection | `GET /vault/breach-check` | Checks website domain names (never passwords) against HaveIBeenPwned API; results stored in a `breach_cache(domain, is_breached, checked_at)` SQLite table — survives server restarts; re-fetched if `checked_at` is older than 24 h; breach badges on dashboard |
 
 **Deliverable:** AI-enhanced vault dashboard with local-first security intelligence and zero sensitive-data leakage.
 
@@ -649,8 +658,8 @@ Requirements:
 **Test Focus:**
 - Metadata extraction helper strips encrypted fields — assert output dict contains no `*_encrypted` keys and no raw plaintext credentials
 - Claude API client is called with a payload containing only safe fields (mock the API; assert request body)
-- Natural language search maps sample queries to the correct entry filters
-- Breach check result is cached — assert the HIBP API is called only once for repeated requests within 24 h
+- Natural language search (`GET /vault/ai-search?q=`) maps sample queries to the correct entry filters; 5-minute in-memory cache returns same result without a second API call for identical queries within the window
+- Breach check result is stored in `breach_cache` SQLite table — assert the HIBP API is called only once for repeated requests within 24 h; assert result survives a simulated server restart (read from DB, not memory)
 
 ---
 
@@ -722,12 +731,13 @@ Requirements:
 |---|---|
 | `app/routes/api.py` | New router at `/api/v1/` — mirrors all vault CRUD + auth routes, returns JSON instead of HTML |
 | `app/schemas/api.py` | JSON request/response schemas for the REST API layer |
-| `app/security/tokens.py` | JWT access token (short-lived) + refresh token (long-lived) generation and verification via `python-jose` |
+| `app/security/tokens.py` | JWT access token (short-lived, 15 min) + refresh token (long-lived) generation and verification via `PyJWT` — preferred over `python-jose` which has had CVEs and is less actively maintained |
+| `app/models/revoked_token.py` | `RevokedToken` ORM model — stores revoked refresh token JTIs with expiry; checked only on token refresh, not on every request |
 | `POST /api/v1/login` | Returns `{ access_token, refresh_token }` on success; never sets a cookie |
-| `POST /api/v1/refresh` | Accepts a refresh token, returns a new access token |
-| `POST /api/v1/logout` | Invalidates the refresh token |
+| `POST /api/v1/refresh` | Accepts a refresh token, checks it against `revoked_tokens` table, returns a new access token |
+| `POST /api/v1/logout` | Revokes the refresh token — marks its JTI as revoked in the `revoked_tokens` table; access tokens expire naturally after their short TTL (do not blacklist access tokens per-request) |
 | `app/middleware/auth_guard.py` | Extend to accept `Authorization: Bearer <token>` for `/api/v1/*` routes alongside the existing session cookie check for HTML routes |
-| `app/main.py` | CORS configuration for mobile clients |
+| `app/main.py` | CORS configuration — required for browser-based clients (PWA or React SPA served from a different origin); native Flutter HTTP calls do not require CORS headers but including them is harmless and future-proofs the API |
 
 **Mobile client (new top-level directory `mobile/`):**
 
@@ -750,8 +760,10 @@ Requirements:
 - [ ] Token refresh happens transparently — the user is not logged out when the access token expires
 
 **Test Focus:**
-- JWT token generation, verification, and expiry
+- JWT token generation, verification, and expiry (`PyJWT`)
 - API routes return 401 for missing/expired tokens and 200 for valid ones
+- Logout revokes the refresh token — subsequent refresh attempts with the same token return 401
+- Access tokens continue to work until natural expiry after logout (by design — short TTL mitigates this)
 - HTML routes are unaffected by the new API middleware
 - Flutter widget tests for login flow and vault list
 
