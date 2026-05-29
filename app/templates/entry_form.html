@@ -126,7 +126,8 @@
           type="password"
           {% if not is_edit %}required{% endif %}
           autocomplete="off"
-          placeholder="{{ 'Leave blank to keep current password' if is_edit else 'Enter password' }}"
+          value="{{ entry.password if is_edit else '' }}"
+          placeholder="Enter password"
           class="w-full px-3 py-2 pr-16 border border-gray-300 rounded-lg text-sm
                  focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
         >
@@ -141,7 +142,7 @@
         </button>
       </div>
       {% if is_edit %}
-      <p class="text-xs text-gray-400 mt-1">Leave blank to keep the existing password unchanged.</p>
+      <p class="text-xs text-gray-400 mt-1">Clear this field to keep the current password unchanged.</p>
       {% endif %}
     </div>
 
