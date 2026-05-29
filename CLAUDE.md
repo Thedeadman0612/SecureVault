@@ -80,6 +80,14 @@ Browser → FastAPI route handler → Auth middleware check
 
 **Session:** Starlette `SessionMiddleware` with `itsdangerous` signed cookies. The derived encryption key is stored in the session dict and cleared on logout or timeout. Never log it.
 
+> ⚠️ **Known limitation (Phase 1):** Default Starlette sessions are **signed but not encrypted** — session data (including the encryption key) is base64-readable from the raw cookie value. Phase 2 must switch to an encrypted session backend (e.g. `starlette-session` with `cryptography`-backed encryption) so the cookie is opaque even if intercepted. Redis is NOT required — an encrypted cookie store is sufficient for this local-first app.
+
+**Middleware stack order — `AuthGuard` inner, `SessionMiddleware` outer:**
+Starlette applies middleware in reverse-add order. `SessionMiddleware` must be added last (outermost) so it decodes the cookie and populates `request.session` **before** `AuthGuard` (inner) attempts to read `request.session["encryption_key"]`. Reversing the order means `AuthGuard` always sees an empty session and redirects every request to `/login`.
+
+**Known architecture limitation — server-side decryption:**
+This app decrypts vault entries on the server and renders plaintext HTML to the browser. It is "encrypted at rest" — NOT zero-knowledge. A compromised server runtime can observe decrypted secrets during active requests. This is an accepted trade-off for simplicity and educational clarity. A future client-side crypto architecture (WebCrypto + React SPA) would eliminate this, but is out of scope for current phases.
+
 ### Module Responsibilities
 
 | Module | Purpose |
@@ -220,12 +228,15 @@ except ValueError:
 | File / Area | What's needed |
 |---|---|
 | `app/middleware/csrf.py` | CSRF protection middleware (`starlette-csrf` or double-submit cookie pattern) |
+| `app/middleware/` or `app/main.py` | Content Security Policy (CSP) response header — `script-src 'self'`, no inline scripts; critical for a password manager where XSS = vault compromise since decrypted secrets are rendered in the browser |
+| `app/main.py` | Switch to an encrypted session backend (e.g. `starlette-session` with `cryptography`) — Phase 1 sessions are signed-only (base64-readable); Phase 2 must make them opaque to the browser |
 | `app/middleware/rate_limit.py` | Login rate limiting + lockout (`slowapi` with `InMemoryLimiter` — no Redis dependency; or manual SQLite-backed attempt counter) |
 | `app/security/encryption.py` | Add AES-256-GCM encrypt/decrypt alongside Fernet; keep Fernet decrypt **permanently** — legacy entries are never force-migrated all at once |
 | `app/security/encryption.py` | Replace PBKDF2HMAC key derivation with Argon2id |
 | `app/models/vault_entry.py` | Add `encryption_version` column (default `"fernet"`; set to `"aesgcm"` after re-encryption) — lets the service layer choose the right algorithm per entry |
 | `app/migrations/` | New Alembic migration for `encryption_version` column (schema only — no data touched) |
 | `app/services/vault_service.py` | Lazy re-encryption on read: if `entry.encryption_version == "fernet"` → decrypt with Fernet → re-encrypt with AES-GCM → save → set `encryption_version = "aesgcm"`; happens transparently while the key is already in session |
+| `app/security/encryption.py` | Add `get_cipher(version, key)` factory function that returns the right algorithm — keeps `if/else` version-routing out of the service layer |
 | `app/main.py` | Set `https_only=True` and `same_site='strict'` on `SessionMiddleware` for production; add environment check to allow `https_only=False` in local dev only; reduce `SESSION_TIMEOUT_MINUTES` default to 10 |
 | `app/main.py` | Wire CSRF middleware into middleware stack |
 
@@ -254,8 +265,9 @@ except ValueError:
 | All `app/` files | `ruff check app/` zero violations |
 | All `app/` files | Structured logging — verify no secrets appear in any log output |
 | `README.md` | Project overview, architecture diagram, setup instructions, screenshots, security design notes, roadmap |
-| `docs/architecture.md` | Architecture documentation |
-| `docs/threat_model.md` | Threat model document |
+| `docs/architecture.md` | Architecture documentation — include the server-side decryption limitation, middleware order reasoning, and session cookie encryption decision |
+| `docs/threat_model.md` | Threat model document — must cover: XSS (catastrophic for a password manager; mitigated by CSP + Jinja2 auto-escape), session cookie exposure (mitigated by encrypted sessions), server-side decryption (accepted trade-off), Python memory zeroing limitation (GC does not zero memory; `bytearray` helps but strings are immutable — document as known limitation) |
+| `docs/security_audit_log.md` | Security audit logging strategy — login success/failure, admin actions, suspicious activity; logged to a dedicated stream separate from app debug logs; must never contain passwords, keys, or decrypted values |
 
 ---
 
@@ -280,7 +292,8 @@ except ValueError:
 
 | File / Area | What's needed |
 |---|---|
-| `app/services/ai_service.py` | Anthropic Claude API client; all AI feature functions; metadata extraction helpers (strips sensitive fields before any API call); must never accept raw password/username as a parameter |
+| `app/schemas/ai_metadata.py` | `VaultMetadataForAI` dataclass — fields: `title`, `website`, `category`, `password_length`, `has_uppercase`, `has_numbers`, `has_symbols`, `created_at`, `updated_at` only; no `password`, `username`, `notes` fields exist on this type, making it structurally impossible to pass sensitive data to AI functions |
+| `app/services/ai_service.py` | Anthropic Claude API client; all AI feature functions accept `list[VaultMetadataForAI]` — never `list[VaultEntry]`; metadata extraction helper converts `VaultEntry` → `VaultMetadataForAI` (strips all encrypted fields) before any API call |
 | `app/routes/ai.py` | Thin route handlers for all AI features, delegating to `ai_service` |
 | `app/config/settings.py` | Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` settings |
 | `.env` | Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` variables |
@@ -318,6 +331,8 @@ except ValueError:
 
 > ⚠️ **SMTP credentials** (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`) must only be set via environment variables — never committed to the repository. Add them to `.env` (gitignored) and document them in `.env.example` with placeholder values only.
 
+> 📝 **SQLite is intentional.** SQLite in WAL mode handles moderate read concurrency well but has real write-contention limits under high multi-user load. This is a deliberate trade-off for local-first simplicity and educational clarity — not a production multi-tenant choice. Document this explicitly in `docs/architecture.md`.
+
 ---
 
 ### Phase 8 — Mobile PWA — Status: 🔴 Not Started
@@ -338,6 +353,7 @@ except ValueError:
 ### Phase 9 — Native Mobile App — Status: 🔴 Not Started
 
 > **Prerequisites:** Phase 5 (Docker/deployment) complete · Phase 7 (Multi-user) complete · HTTPS certificate in place.
+> **Dual-auth trade-off:** This phase runs session-cookie auth (web) and JWT auth (mobile API) in parallel. This is intentional — browsers use sessions, native clients use tokens — but it creates two auth code paths in `auth_guard.py` and doubles auth test surface. Document this explicitly; don't try to unify them.
 
 | File / Area | What's needed |
 |---|---|

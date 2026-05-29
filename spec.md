@@ -187,6 +187,8 @@ System behavior:
 
 Initial implementation uses Starlette `SessionMiddleware` with secure cookies backed by `itsdangerous`.
 
+> **Known limitation (Phase 1):** Starlette's default `SessionMiddleware` signs cookies (tamper-proof via HMAC) but does **not** encrypt them — the session payload is base64-readable by the client. The `encryption_key` stored in the session is therefore visible to anyone who can read the cookie value. Phase 2 replaces this with an encrypted session backend so the payload is opaque to the client.
+
 Requirements:
 - inactivity timeout
 - logout support
@@ -516,8 +518,10 @@ Requirements:
 Requirements:
 - stronger input validation
 - improved session handling (secure cookies, HttpOnly, SameSite)
+- **encrypted session backend** — replace Phase 1's signed-only `SessionMiddleware` with an encrypted session so the `encryption_key` in the session payload is opaque to the client
 - CSRF protection
 - login rate limiting / lockout — use `slowapi` with `InMemoryLimiter` (no Redis dependency) or a SQLite-backed attempt counter
+- **Content Security Policy (CSP)** header on all responses — critical for a password manager since XSS = full vault compromise; start with a strict default-src policy and relax only for known CDNs
 - improved key derivation (Argon2id)
 - upgrade encryption to AES-256-GCM for all **new** writes; keep Fernet decrypt path permanently for legacy entries
 - add `encryption_version` column to `vault_entries` (default `"fernet"`; updated to `"aesgcm"` after re-encryption)
@@ -532,6 +536,8 @@ Requirements:
 - [ ] Login is rate-limited; repeated failures trigger a lockout or delay
 - [ ] CSRF tokens are required and validated on all state-changing routes
 - [ ] Session cookies are `HttpOnly`, `Secure`, and `SameSite=Strict`
+- [ ] Session payload is encrypted — the `encryption_key` value is not readable in the raw cookie
+- [ ] All responses include a CSP header; the browser console shows no CSP violations on normal usage
 - [ ] All new vault writes use AES-256-GCM; existing Fernet entries are re-encrypted lazily on first read
 - [ ] `encryption_version` column correctly reflects the algorithm used for each entry
 - [ ] No stack traces or internal error details are ever exposed in the browser
@@ -543,6 +549,7 @@ Requirements:
 - Argon2id key derivation produces a consistent, usable key
 - Lazy migration: reading a `"fernet"` entry updates `encryption_version` to `"aesgcm"` and the ciphertext is valid AES-GCM afterwards
 - Both algorithms decrypt their own ciphertext correctly; cross-decryption fails with `InvalidToken`
+- CSP header is present on vault and entry routes; value includes `default-src 'self'`
 
 ### Phase 3 — UX Improvements
 
@@ -582,9 +589,10 @@ Requirements:
 - linting (ruff or flake8)
 - full type hints
 - structured logging
+- **security audit logging** — log security-relevant events (login success/failure, vault CRUD, session invalidation) to a dedicated `docs/security_audit_log.md` format or structured log stream; must never include passwords, keys, or decrypted values
 - README with screenshots
-- architecture documentation
-- threat model document
+- architecture documentation (`docs/architecture.md` — component diagram, request lifecycle, crypto design)
+- threat model document (`docs/threat_model.md` — assets, threats, mitigations, known limitations)
 
 **Deliverable:** Professional-grade project repository.
 
@@ -598,6 +606,7 @@ Requirements:
 **Test Focus:**
 - Full regression suite passes cleanly with no skipped tests
 - Log output captured in tests contains no passwords, keys, or session tokens
+- Security audit log entries are emitted for login success, login failure, and vault delete operations
 
 ### Phase 5 — DevSecOps
 
@@ -631,8 +640,9 @@ Requirements:
 > **Critical security constraint:** Only plaintext metadata (`title`, `website`, `category`, password complexity metrics, timestamps) may be transmitted to the Claude API. Decrypted passwords, usernames, notes, encryption keys, and session tokens must never leave the local machine.
 
 Requirements:
-- Add `app/services/ai_service.py` — Anthropic Claude API client; metadata extraction helpers that strip sensitive fields before any API call; all AI feature functions; must never accept raw password/username/notes as a parameter
-- Add `app/routes/ai.py` — thin route handlers delegating to `ai_service`
+- Add `app/schemas/ai_metadata.py` — defines `VaultMetadataForAI` Pydantic model containing **only** safe fields: `title`, `website`, `category`, `password_length`, `has_uppercase`, `has_numbers`, `has_symbols`, `created_at`, `updated_at`. This DTO is the only type accepted by `ai_service` functions — structural enforcement of the metadata-only constraint, not just a naming convention.
+- Add `app/services/ai_service.py` — Anthropic Claude API client; accepts `list[VaultMetadataForAI]` (never raw entry objects); metadata extraction helpers; all AI feature functions; function signatures must never include `password`, `username`, or `notes` parameters
+- Add `app/routes/ai.py` — thin route handlers delegating to `ai_service`; convert `VaultEntry` ORM objects to `VaultMetadataForAI` DTOs before any `ai_service` call
 - Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` to `.env` and `app/config/settings.py`
 
 **Features:**
@@ -666,6 +676,8 @@ Requirements:
 ### Phase 7 — Multi-User Support
 
 **Goal:** Extend the vault to support multiple independent users, each with their own isolated encrypted vault.
+
+> **Database note:** SQLite is retained intentionally — it handles concurrent reads fine and write contention is negligible for a personal vault with a small number of concurrent users. A migration to PostgreSQL is a non-goal for this project; the local-first, portfolio scope does not justify the operational complexity.
 
 Requirements:
 - Add `username` and `email` fields to the `User` model
@@ -852,6 +864,7 @@ Claude Code should:
 - secure memory handling (zeroize secrets after use)
 - HTTPS via reverse proxy (nginx)
 - cloud sync experiments
+- **browser-side encryption** — long-term direction: derive the vault key client-side using WebCrypto API so the server never sees the raw key (true zero-knowledge); requires a React or HTMX SPA to manage the in-browser key lifecycle; not feasible with server-rendered Jinja2 templates alone
 
 ---
 
@@ -876,10 +889,13 @@ The application should be designed with awareness of:
 |---|---|
 | Local DB theft | All sensitive fields encrypted; key is never stored |
 | Brute force login | Rate limiting + Argon2 slow hashing |
-| Session hijacking | Secure, HttpOnly, SameSite cookies |
+| Session hijacking | Secure, HttpOnly, SameSite cookies; encrypted session backend (Phase 2) |
 | Accidental log exposure | Strict logging policy; no secrets logged |
 | Shoulder surfing | Password masking; visibility toggle |
 | Insecure local storage | No plaintext secrets on disk |
+| XSS attack | Content Security Policy (Phase 2); Jinja2 auto-escaping; XSS = full vault compromise for a password manager (attacker can read decrypted values from the DOM) |
+| Server-side decryption (not zero-knowledge) | **Known limitation:** decryption happens on the server — the server briefly holds plaintext in memory; mitigated by minimising plaintext lifetime, never logging it, and clearing session on logout; true zero-knowledge requires client-side WebCrypto (Future Enhancement) |
+| Memory zeroing | **Known limitation:** Python's GC and immutable strings make reliable secret zeroing impractical; after logout the key is cleared from the session dict but may linger in heap memory until collected; documented as a known limitation rather than a fixable bug |
 
 ---
 
