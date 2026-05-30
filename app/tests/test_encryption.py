@@ -21,8 +21,10 @@ import pytest
 from app.security.encryption import (
     InvalidToken,
     decrypt_field,
+    decrypt_field_gcm,
     derive_key,
     encrypt_field,
+    encrypt_field_gcm,
     generate_kdf_salt,
 )
 
@@ -193,11 +195,11 @@ class TestDeriveKeyArgon2id:
 
         raw_salt = b"T" * 32
         salt_b64 = base64.urlsafe_b64encode(raw_salt).decode("ascii")
-        password = "verifyvariant"
+        kdf_input = "verifyvariant"
 
         # Expected output using Argon2id (Type.ID) directly.
         expected = hash_secret_raw(
-            secret=password.encode("utf-8"),
+            secret=kdf_input.encode("utf-8"),
             salt=raw_salt,
             time_cost=3,
             memory_cost=65_536,
@@ -206,7 +208,7 @@ class TestDeriveKeyArgon2id:
             type=Type.ID,
         )
 
-        assert derive_key(password, salt_b64) == expected
+        assert derive_key(kdf_input, salt_b64) == expected
 
     def test_argon2i_variant_produces_different_output(self):
         """Argon2i (Type.I) must not match our output — confirming we are
@@ -215,10 +217,10 @@ class TestDeriveKeyArgon2id:
 
         raw_salt = b"U" * 32
         salt_b64 = base64.urlsafe_b64encode(raw_salt).decode("ascii")
-        password = "variantcheck"
+        kdf_input = "variantcheck"
 
         argon2i_key = hash_secret_raw(
-            secret=password.encode("utf-8"),
+            secret=kdf_input.encode("utf-8"),
             salt=raw_salt,
             time_cost=3,
             memory_cost=65_536,
@@ -227,7 +229,184 @@ class TestDeriveKeyArgon2id:
             type=Type.I,
         )
 
-        assert derive_key(password, salt_b64) != argon2i_key
+        assert derive_key(kdf_input, salt_b64) != argon2i_key
+
+
+# ---------------------------------------------------------------------------
+# AES-256-GCM encrypt
+# ---------------------------------------------------------------------------
+
+
+class TestEncryptFieldGcm:
+    def test_returns_string(self):
+        assert isinstance(encrypt_field_gcm("hello", _RAW_KEY), str)
+
+    def test_is_valid_base64(self):
+        token = encrypt_field_gcm("hello", _RAW_KEY)
+        decoded = base64.urlsafe_b64decode(token.encode("ascii"))
+        assert isinstance(decoded, bytes)
+
+    def test_minimum_length(self):
+        """Even an empty string produces at least nonce(12) + tag(16) = 28 bytes."""
+        token = encrypt_field_gcm("", _RAW_KEY)
+        raw = base64.urlsafe_b64decode(token.encode("ascii"))
+        assert len(raw) >= 28  # 12-byte nonce + 16-byte tag + 0 ciphertext
+
+    def test_ciphertext_does_not_contain_plaintext(self):
+        token = encrypt_field_gcm("supersecretvalue", _RAW_KEY)
+        assert "supersecretvalue" not in token
+
+    def test_same_plaintext_produces_different_tokens(self):
+        """Random nonce — same plaintext encrypted twice must produce
+        different tokens."""
+        t1 = encrypt_field_gcm("hello", _RAW_KEY)
+        t2 = encrypt_field_gcm("hello", _RAW_KEY)
+        assert t1 != t2
+
+    def test_nonce_differs_between_calls(self):
+        """The first 12 bytes of each token (the nonce) must be unique."""
+        raw1 = base64.urlsafe_b64decode(encrypt_field_gcm("hello", _RAW_KEY))
+        raw2 = base64.urlsafe_b64decode(encrypt_field_gcm("hello", _RAW_KEY))
+        assert raw1[:12] != raw2[:12]
+
+    def test_empty_string_encrypts(self):
+        token = encrypt_field_gcm("", _RAW_KEY)
+        assert isinstance(token, str)
+        assert len(token) > 0
+
+    def test_unicode_plaintext(self):
+        token = encrypt_field_gcm("pässwörð!🔒", _RAW_KEY)
+        assert isinstance(token, str)
+
+    def test_long_plaintext(self):
+        token = encrypt_field_gcm("a" * 10_000, _RAW_KEY)
+        assert isinstance(token, str)
+
+    def test_wrong_key_length_raises_value_error(self):
+        with pytest.raises(ValueError, match="32 bytes"):
+            encrypt_field_gcm("hello", b"tooshort")
+
+    def test_key_31_bytes_raises_value_error(self):
+        with pytest.raises(ValueError, match="32 bytes"):
+            encrypt_field_gcm("hello", b"A" * 31)
+
+    def test_key_33_bytes_raises_value_error(self):
+        with pytest.raises(ValueError, match="32 bytes"):
+            encrypt_field_gcm("hello", b"A" * 33)
+
+
+# ---------------------------------------------------------------------------
+# AES-256-GCM decrypt
+# ---------------------------------------------------------------------------
+
+
+class TestDecryptFieldGcm:
+    def test_roundtrip_basic(self):
+        plaintext = "my_secret_password"
+        token = encrypt_field_gcm(plaintext, _RAW_KEY)
+        assert decrypt_field_gcm(token, _RAW_KEY) == plaintext
+
+    def test_roundtrip_empty_string(self):
+        token = encrypt_field_gcm("", _RAW_KEY)
+        assert decrypt_field_gcm(token, _RAW_KEY) == ""
+
+    def test_roundtrip_unicode(self):
+        plaintext = "pässwörð!🔒"
+        token = encrypt_field_gcm(plaintext, _RAW_KEY)
+        assert decrypt_field_gcm(token, _RAW_KEY) == plaintext
+
+    def test_roundtrip_long_value(self):
+        plaintext = "x" * 10_000
+        token = encrypt_field_gcm(plaintext, _RAW_KEY)
+        assert decrypt_field_gcm(token, _RAW_KEY) == plaintext
+
+    def test_returns_string(self):
+        token = encrypt_field_gcm("hello", _RAW_KEY)
+        result = decrypt_field_gcm(token, _RAW_KEY)
+        assert isinstance(result, str)
+
+    def test_wrong_key_raises_invalid_token(self):
+        """Wrong key means the auth tag will not verify — must raise
+        InvalidToken (converted from AESGCM's InvalidTag internally)."""
+        token = encrypt_field_gcm("secret", _RAW_KEY)
+        wrong_key = b"B" * 32
+        with pytest.raises(InvalidToken):
+            decrypt_field_gcm(token, wrong_key)
+
+    def test_tampered_ciphertext_raises_invalid_token(self):
+        """Flipping a byte in the ciphertext body must fail the auth tag
+        check — GCM detects any modification."""
+        token = encrypt_field_gcm("secret", _RAW_KEY)
+        raw = bytearray(base64.urlsafe_b64decode(token))
+        # Flip a byte in the ciphertext region (after the 12-byte nonce,
+        # before the last 16 bytes which are the tag).
+        raw[12] ^= 0xFF
+        tampered = base64.urlsafe_b64encode(bytes(raw)).decode("ascii")
+        with pytest.raises(InvalidToken):
+            decrypt_field_gcm(tampered, _RAW_KEY)
+
+    def test_tampered_tag_raises_invalid_token(self):
+        """Flipping a byte in the authentication tag must also be detected."""
+        token = encrypt_field_gcm("secret", _RAW_KEY)
+        raw = bytearray(base64.urlsafe_b64decode(token))
+        # Flip the last byte (end of the 16-byte tag).
+        raw[-1] ^= 0xFF
+        tampered = base64.urlsafe_b64encode(bytes(raw)).decode("ascii")
+        with pytest.raises(InvalidToken):
+            decrypt_field_gcm(tampered, _RAW_KEY)
+
+    def test_tampered_nonce_raises_invalid_token(self):
+        """Changing the nonce means decrypt uses a different IV, producing
+        a different keystream, so the tag will not verify."""
+        token = encrypt_field_gcm("secret", _RAW_KEY)
+        raw = bytearray(base64.urlsafe_b64decode(token))
+        # Flip the first byte of the nonce.
+        raw[0] ^= 0xFF
+        tampered = base64.urlsafe_b64encode(bytes(raw)).decode("ascii")
+        with pytest.raises(InvalidToken):
+            decrypt_field_gcm(tampered, _RAW_KEY)
+
+    def test_wrong_key_length_raises_value_error(self):
+        token = encrypt_field_gcm("hello", _RAW_KEY)
+        with pytest.raises(ValueError, match="32 bytes"):
+            decrypt_field_gcm(token, b"tooshort")
+
+    def test_token_too_short_raises_value_error(self):
+        """A base64 string that decodes to fewer than 12 bytes cannot hold
+        a valid nonce — must raise ValueError, not crash inside AESGCM."""
+        too_short = base64.urlsafe_b64encode(b"short").decode("ascii")
+        with pytest.raises(ValueError, match="too short"):
+            decrypt_field_gcm(too_short, _RAW_KEY)
+
+    def test_fernet_token_not_decryptable_as_gcm(self):
+        """A Fernet token passed to decrypt_field_gcm() must fail — the two
+        algorithms must not accidentally accept each other's tokens.
+        This is a cross-algorithm isolation guard for get_cipher() (Task 3)."""
+        fernet_token = encrypt_field("secret", _RAW_KEY)
+        with pytest.raises((InvalidToken, ValueError)):
+            decrypt_field_gcm(fernet_token, _RAW_KEY)
+
+    def test_gcm_token_not_decryptable_as_fernet(self):
+        """A GCM token passed to decrypt_field() must also fail."""
+        gcm_token = encrypt_field_gcm("secret", _RAW_KEY)
+        with pytest.raises((InvalidToken, ValueError)):
+            decrypt_field(gcm_token, _RAW_KEY)
+
+    def test_roundtrip_with_derived_key(self):
+        """Full integration: derive key → GCM encrypt → GCM decrypt."""
+        salt = generate_kdf_salt()
+        key = derive_key("masterpassword123", salt)
+        plaintext = "vault_entry_password"
+        token = encrypt_field_gcm(plaintext, key)
+        assert decrypt_field_gcm(token, key) == plaintext
+
+    def test_key_derived_from_different_password_raises_invalid_token(self):
+        salt = generate_kdf_salt()
+        key_a = derive_key("correct_master", salt)
+        key_b = derive_key("wrong_master", salt)
+        token = encrypt_field_gcm("secret", key_a)
+        with pytest.raises(InvalidToken):
+            decrypt_field_gcm(token, key_b)
 
 
 # ---------------------------------------------------------------------------

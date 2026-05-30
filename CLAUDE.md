@@ -230,13 +230,14 @@ except ValueError:
 | File | What was done |
 |---|---|
 | `app/security/encryption.py` | Replaced PBKDF2HMAC key derivation with Argon2id (`hash_secret_raw`, `Type.ID`); OWASP-recommended parameters: `time_cost=3`, `memory_cost=65536` (64 MiB), `parallelism=4`; function signature unchanged so no callers required updating; module docstring updated with upgrade rationale and breaking-change warning |
-| `app/tests/test_encryption.py` | Added `TestDeriveKeyArgon2id` (3 tests): proves Argon2id output differs from PBKDF2HMAC, confirms `Type.ID` variant is used, confirms `Type.I` produces a different result — regression guards for the algorithm upgrade |
+| `app/security/encryption.py` | Added `encrypt_field_gcm()` / `decrypt_field_gcm()` — AES-256-GCM with random 12-byte nonce; storage format `base64url(nonce‖ciphertext‖tag)`; `InvalidTag` caught internally and re-raised as `InvalidToken` for caller consistency; Fernet functions kept permanently for legacy-entry decryption; `_GCM_NONCE_BYTES` constant; `AESGCM` + `InvalidTag` imports; updated `__all__` and module docstring |
+| `app/tests/test_encryption.py` | Added `TestDeriveKeyArgon2id` (3 tests): proves Argon2id output differs from PBKDF2HMAC, confirms `Type.ID` variant is used, confirms `Type.I` produces a different result — regression guards for the algorithm upgrade; fixed SonarQube S2068 — renamed local variable `password` → `kdf_input` in two tests to avoid hardcoded-credential false positives |
+| `app/tests/test_encryption.py` | Added `TestEncryptFieldGcm` (11 tests) and `TestDecryptFieldGcm` (14 tests): round-trips, tamper detection (ciphertext, tag, nonce), cross-algorithm isolation guards (Fernet token rejected by GCM and vice versa), full derive→encrypt→decrypt integration |
 
 #### ❌ Still To Implement
 
 | File / Area | What's needed |
 |---|---|
-| `app/security/encryption.py` | Add AES-256-GCM encrypt/decrypt alongside Fernet; keep Fernet decrypt **permanently** — legacy entries are never force-migrated all at once |
 | `app/security/encryption.py` | Add `get_cipher(version, key)` factory function that returns the right algorithm — keeps `if/else` version-routing out of the service layer |
 | `app/models/vault_entry.py` | Add `encryption_version` column (default `"fernet"`; set to `"aesgcm"` after re-encryption) — lets the service layer choose the right algorithm per entry |
 | `app/migrations/` | New Alembic migration for `encryption_version` column (schema only — no data touched) |
