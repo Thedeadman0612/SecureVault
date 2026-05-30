@@ -11,15 +11,27 @@ All public functions:
   - Decrypt sensitive fields after reading, converting InvalidToken → HTTP 500.
 
 FIELD MAP (schema ↔ ORM column):
-  username  ↔  username_encrypted   (Fernet token, always present)
-  password  ↔  password_encrypted   (Fernet token, always present)
-  notes     ↔  notes_encrypted      (Fernet token, nullable)
+  username  ↔  username_encrypted   (encrypted token, always present)
+  password  ↔  password_encrypted   (encrypted token, always present)
+  notes     ↔  notes_encrypted      (encrypted token, nullable)
   title     ↔  title                (plaintext VARCHAR)
   website   ↔  website              (plaintext VARCHAR, nullable)
   category  ↔  category             (plaintext VARCHAR, nullable)
 
+ENCRYPTION VERSIONING (Phase 2):
+  Each vault_entries row carries an encryption_version column:
+    "fernet"  — Phase 1 legacy: AES-128-CBC + HMAC-SHA256 via Fernet.
+    "aesgcm"  — Phase 2+: AES-256-GCM authenticated encryption.
+
+  All writes (create / update) use "aesgcm". Legacy "fernet" rows are upgraded
+  transparently on first read (lazy re-encryption in _decrypt_entry). The
+  algorithm is selected at runtime via get_cipher(entry.encryption_version, key).
+
 INTERNAL HELPERS (prefixed _):
   _decrypt_entry()  — decrypts a single VaultEntry ORM row → VaultEntryResponse.
+                       Algorithm is chosen from entry.encryption_version.
+                       If db is provided and the entry is still "fernet", lazily
+                       re-encrypts with AES-256-GCM and saves before returning.
                        Catches InvalidToken and raises HTTP 500 with a generic
                        message; non-sensitive detail is logged.
 
@@ -36,7 +48,7 @@ from sqlalchemy.orm import Session
 
 from app.models.vault_entry import VaultEntry
 from app.schemas.vault import VaultEntryCreate, VaultEntryResponse, VaultEntryUpdate
-from app.security.encryption import InvalidToken, decrypt_field, encrypt_field
+from app.security.encryption import InvalidToken, get_cipher
 
 logger = logging.getLogger(__name__)
 
@@ -50,43 +62,100 @@ _ENTRY_NOT_FOUND_MSG = "Entry not found."
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _decrypt_entry(entry: VaultEntry, raw_key: bytes) -> VaultEntryResponse:
+def _decrypt_entry(
+    entry: VaultEntry,
+    raw_key: bytes,
+    db: Session | None = None,
+) -> VaultEntryResponse:
     """Decrypt a VaultEntry ORM row into a VaultEntryResponse.
 
-    Decrypts username_encrypted, password_encrypted, and (if present)
-    notes_encrypted using the provided raw key. Any decryption failure
-    (wrong key, tampered ciphertext) raises HTTP 500 with a generic message.
+    Uses get_cipher(entry.encryption_version, raw_key) to select the correct
+    algorithm per row — "fernet" for Phase 1 legacy entries, "aesgcm" for
+    Phase 2+ entries. Any decryption failure raises HTTP 500.
+
+    Lazy re-encryption (Phase 2 upgrade path):
+      If db is provided and the entry's encryption_version is not "aesgcm",
+      this function re-encrypts all sensitive fields with AES-256-GCM and
+      saves the row back to the database before returning. The user's key is
+      already in memory (the entry was just successfully decrypted), so there
+      is no extra authentication cost. Re-encryption failure is non-fatal —
+      the decrypted response is still returned and will be retried next read.
 
     Args:
         entry:   VaultEntry ORM row retrieved from the database.
         raw_key: Raw 32-byte vault encryption key from the session.
+        db:      SQLAlchemy session. When provided, enables lazy re-encryption
+                 of legacy Fernet entries to AES-256-GCM on first read.
 
     Returns:
         VaultEntryResponse populated with plaintext sensitive fields.
 
     Raises:
-        HTTPException 500: If InvalidToken is raised during decryption.
+        HTTPException 500: If decryption fails (wrong key, tampered ciphertext,
+            bad key length).
     """
+    # get_cipher() returns (encrypt_fn, decrypt_fn) pre-bound to raw_key.
+    # We only need decrypt here; the encrypt closure is used in the lazy
+    # re-encryption block below.
+    _, decrypt = get_cipher(entry.encryption_version, raw_key)
+
     try:
-        username = decrypt_field(entry.username_encrypted, raw_key)
-        password = decrypt_field(entry.password_encrypted, raw_key)
-        notes = (
-            decrypt_field(entry.notes_encrypted, raw_key)
-            if entry.notes_encrypted
-            else None
-        )
+        username = decrypt(entry.username_encrypted)
+        password = decrypt(entry.password_encrypted)
+        notes = decrypt(entry.notes_encrypted) if entry.notes_encrypted else None
     except (InvalidToken, ValueError):
-        # InvalidToken: wrong key or tampered ciphertext.
-        # ValueError: decrypt_field() raises this when fernet_key is the wrong
-        # length (e.g. corrupt session or key derivation bug).
+        # InvalidToken: wrong key or tampered ciphertext (both Fernet and GCM).
+        # ValueError: get_cipher raises this for an unknown encryption_version
+        # string (DB corruption), or decrypt_field raises it for a wrong key
+        # length (corrupt session / key derivation bug).
         logger.error(
-            "Decryption failed for entry id=%d — key mismatch, tampering, or bad key length.",
+            "Decryption failed for entry id=%d (version=%r) — "
+            "key mismatch, tampering, corrupt version, or bad key length.",
             entry.id,
+            entry.encryption_version,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to decrypt entry.",
         )
+
+    # -------------------------------------------------------------------------
+    # Lazy re-encryption: upgrade "fernet" entries to "aesgcm" on first read.
+    #
+    # Why here and not in a migration:
+    #   The encryption key only exists in session memory after login — Alembic
+    #   has no access to it. So the schema migration (T4) added the column;
+    #   this block does the actual data upgrade, piggy-backing on reads that
+    #   are already loading and decrypting the entry.
+    #
+    # Why non-fatal on failure:
+    #   If the commit fails (e.g. transient DB error) we still return the
+    #   correctly decrypted response. The entry stays "fernet" in the DB and
+    #   will be retried on the next read. Prefer availability over strict
+    #   upgrade enforcement.
+    # -------------------------------------------------------------------------
+    if db is not None and entry.encryption_version != "aesgcm":
+        encrypt, _ = get_cipher("aesgcm", raw_key)
+        try:
+            entry.username_encrypted = encrypt(username)
+            entry.password_encrypted = encrypt(password)
+            entry.notes_encrypted = encrypt(notes) if notes is not None else None
+            entry.encryption_version = "aesgcm"
+            db.commit()
+            logger.info(
+                "Lazily re-encrypted entry id=%d from 'fernet' to 'aesgcm'.",
+                entry.id,
+            )
+        except Exception:
+            db.rollback()
+            # Reset the in-memory ORM object so it reflects the DB state (still
+            # "fernet") — avoids a stale object confusing subsequent operations.
+            entry.encryption_version = "fernet"
+            logger.exception(
+                "Lazy re-encryption failed for entry id=%d; "
+                "returning decrypted value, will retry on next read.",
+                entry.id,
+            )
 
     return VaultEntryResponse(
         id=entry.id,
@@ -125,14 +194,19 @@ def create_entry(
     Returns:
         The newly created entry as a decrypted VaultEntryResponse.
     """
+    # All new entries are written with AES-256-GCM from the start.
+    # get_cipher("aesgcm", raw_key) returns an encrypt closure pre-bound to
+    # the key — callers pass only the plaintext string.
+    encrypt, _ = get_cipher("aesgcm", raw_key)
     entry = VaultEntry(
         user_id=user_id,
         title=data.title,
         website=data.website,
         category=data.category,
-        username_encrypted=encrypt_field(data.username, raw_key),
-        password_encrypted=encrypt_field(data.password, raw_key),
-        notes_encrypted=encrypt_field(data.notes, raw_key) if data.notes else None,
+        encryption_version="aesgcm",
+        username_encrypted=encrypt(data.username),
+        password_encrypted=encrypt(data.password),
+        notes_encrypted=encrypt(data.notes) if data.notes else None,
     )
     db.add(entry)
     try:
@@ -166,7 +240,8 @@ def get_entries(
         .filter(VaultEntry.user_id == user_id)
         .all()
     )
-    return [_decrypt_entry(e, raw_key) for e in entries]
+    # Pass db so legacy "fernet" entries are lazily re-encrypted on first read.
+    return [_decrypt_entry(e, raw_key, db=db) for e in entries]
 
 
 def get_entry(
@@ -202,7 +277,8 @@ def get_entry(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_ENTRY_NOT_FOUND_MSG,
         )
-    return _decrypt_entry(entry, raw_key)
+    # Pass db so a legacy "fernet" entry is lazily re-encrypted on first read.
+    return _decrypt_entry(entry, raw_key, db=db)
 
 
 def update_entry(
@@ -253,15 +329,25 @@ def update_entry(
     if data.category is not None:
         entry.category = data.category if data.category else None
 
-    # Sensitive fields — re-encrypt before writing to DB.
+    # Sensitive fields — re-encrypt using the entry's CURRENT algorithm.
+    #
+    # Why not force "aesgcm" here?
+    #   If we encrypted some fields with GCM but left others in Fernet, the row
+    #   would have mixed ciphertexts while encryption_version could only hold one
+    #   value — an inconsistency that would cause decryption failures. Instead, we
+    #   keep ALL fields on the same algorithm for this commit, then let
+    #   _decrypt_entry() atomically upgrade the ENTIRE row to AES-256-GCM on the
+    #   read-back (the lazy re-encryption block). That upgrade always touches all
+    #   three fields together, so the row is never in a mixed state.
+    encrypt, _ = get_cipher(entry.encryption_version, raw_key)
     if data.username is not None:
-        entry.username_encrypted = encrypt_field(data.username, raw_key)
+        entry.username_encrypted = encrypt(data.username)
     if data.password is not None:
-        entry.password_encrypted = encrypt_field(data.password, raw_key)
+        entry.password_encrypted = encrypt(data.password)
     # Nullable encrypted field: "" clears to NULL, non-empty updates, None no-ops.
     if data.notes is not None:
         if data.notes:
-            entry.notes_encrypted = encrypt_field(data.notes, raw_key)
+            entry.notes_encrypted = encrypt(data.notes)
         else:
             entry.notes_encrypted = None  # user explicitly cleared the notes field
 
@@ -273,7 +359,9 @@ def update_entry(
         raise
     db.refresh(entry)
     logger.info("Updated vault entry id=%d for user id=%d.", entry.id, user_id)
-    return _decrypt_entry(entry, raw_key)
+    # Pass db so _decrypt_entry() lazily upgrades any 'fernet' row to 'aesgcm'
+    # after the update — all three sensitive fields are upgraded atomically.
+    return _decrypt_entry(entry, raw_key, db=db)
 
 
 def delete_entry(
@@ -283,7 +371,7 @@ def delete_entry(
 ) -> None:
     """Permanently delete a vault entry.
 
-    No encryption key is needed — the Fernet tokens are deleted with the row
+    No encryption key is needed — the encrypted tokens are deleted with the row
     and are never decrypted here. Filters on both entry_id AND user_id.
 
     Args:
