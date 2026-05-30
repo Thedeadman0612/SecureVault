@@ -67,6 +67,7 @@ SECURITY INVARIANTS — never violate these:
 
 import base64
 import os
+from collections.abc import Callable
 
 from argon2.low_level import Type, hash_secret_raw
 from cryptography.exceptions import InvalidTag
@@ -87,6 +88,7 @@ __all__ = [
     "decrypt_field",
     "encrypt_field_gcm",
     "decrypt_field_gcm",
+    "get_cipher",
     "InvalidToken",
 ]
 
@@ -380,3 +382,60 @@ def decrypt_field_gcm(token: str, key: bytes) -> str:
         raise InvalidToken
 
     return plaintext_bytes.decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Algorithm factory (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def get_cipher(
+    version: str, key: bytes
+) -> tuple[Callable[[str], str], Callable[[str], str]]:
+    """Return the (encrypt_fn, decrypt_fn) pair for the given encryption version.
+
+    This is the single point of truth for algorithm routing. vault_service
+    calls get_cipher(entry.encryption_version, raw_key) and works with the
+    returned callables — it never imports encrypt_field* / decrypt_field*
+    directly. Adding a third algorithm later means touching only this function.
+
+    Both returned callables share the same interface:
+        encrypt_fn(plaintext: str) -> str   # returns a base64 token
+        decrypt_fn(token:     str) -> str   # returns plaintext
+
+    The key is bound into the closures — callers pass only the plaintext or
+    token string. This keeps vault_service free of any key-passing boilerplate.
+
+    Args:
+        version: The encryption_version string stored on the VaultEntry row.
+                 One of: "fernet" (Phase 1 legacy), "aesgcm" (Phase 2+).
+        key:     Raw 32-byte key from derive_key() (held in session memory).
+
+    Returns:
+        (encrypt_fn, decrypt_fn) — both pre-bound to `key`.
+
+    Raises:
+        ValueError: If `version` is not a recognised algorithm string. This
+                    is a hard fail — silently falling back to the wrong
+                    algorithm would silently produce unreadable ciphertext.
+
+    Example:
+        encrypt, decrypt = get_cipher(entry.encryption_version, raw_key)
+        plaintext = decrypt(entry.username_encrypted)
+        new_token = encrypt(new_plaintext)
+    """
+    if version == "fernet":
+        return (
+            lambda value: encrypt_field(value, key),
+            lambda token: decrypt_field(token, key),
+        )
+    if version == "aesgcm":
+        return (
+            lambda value: encrypt_field_gcm(value, key),
+            lambda token: decrypt_field_gcm(token, key),
+        )
+    raise ValueError(
+        f"Unknown encryption_version {version!r}. "
+        "Expected 'fernet' or 'aesgcm'. "
+        "Possible data corruption in vault_entries.encryption_version."
+    )

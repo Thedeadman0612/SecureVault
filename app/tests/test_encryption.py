@@ -26,6 +26,7 @@ from app.security.encryption import (
     encrypt_field,
     encrypt_field_gcm,
     generate_kdf_salt,
+    get_cipher,
 )
 
 # ---------------------------------------------------------------------------
@@ -230,6 +231,113 @@ class TestDeriveKeyArgon2id:
         )
 
         assert derive_key(kdf_input, salt_b64) != argon2i_key
+
+
+# ---------------------------------------------------------------------------
+# get_cipher() factory
+# ---------------------------------------------------------------------------
+
+
+class TestGetCipher:
+    """Tests for the algorithm factory function.
+
+    get_cipher() is the single routing point that vault_service depends on.
+    These tests verify that the right algorithm is selected, the key is
+    correctly bound into the closures, and unknown versions fail loudly.
+    """
+
+    def test_fernet_version_returns_callables(self):
+        encrypt, decrypt = get_cipher("fernet", _RAW_KEY)
+        assert callable(encrypt)
+        assert callable(decrypt)
+
+    def test_aesgcm_version_returns_callables(self):
+        encrypt, decrypt = get_cipher("aesgcm", _RAW_KEY)
+        assert callable(encrypt)
+        assert callable(decrypt)
+
+    def test_fernet_roundtrip_via_factory(self):
+        """Factory pair for 'fernet' must produce a working round-trip."""
+        encrypt, decrypt = get_cipher("fernet", _RAW_KEY)
+        plaintext = "fernet_vault_secret"
+        assert decrypt(encrypt(plaintext)) == plaintext
+
+    def test_aesgcm_roundtrip_via_factory(self):
+        """Factory pair for 'aesgcm' must produce a working round-trip."""
+        encrypt, decrypt = get_cipher("aesgcm", _RAW_KEY)
+        plaintext = "aesgcm_vault_secret"
+        assert decrypt(encrypt(plaintext)) == plaintext
+
+    def test_fernet_token_format(self):
+        """'fernet' encrypt_fn must produce a Fernet token (starts with gAAAAA)."""
+        encrypt, _ = get_cipher("fernet", _RAW_KEY)
+        assert encrypt("hello").startswith("gAAAAA")
+
+    def test_aesgcm_token_differs_from_fernet_format(self):
+        """'aesgcm' encrypt_fn must NOT produce a Fernet token."""
+        encrypt, _ = get_cipher("aesgcm", _RAW_KEY)
+        assert not encrypt("hello").startswith("gAAAAA")
+
+    def test_key_is_bound_fernet(self):
+        """encrypt_fn must not require the key as an argument — it is
+        pre-bound in the closure."""
+        encrypt, decrypt = get_cipher("fernet", _RAW_KEY)
+        # If key were NOT bound, calling encrypt("hello") would TypeError.
+        token = encrypt("hello")
+        assert decrypt(token) == "hello"
+
+    def test_key_is_bound_aesgcm(self):
+        encrypt, decrypt = get_cipher("aesgcm", _RAW_KEY)
+        token = encrypt("hello")
+        assert decrypt(token) == "hello"
+
+    def test_wrong_key_raises_invalid_token_fernet(self):
+        """Encrypting with key_a and decrypting with key_b must raise
+        InvalidToken — key binding is per-cipher-pair, not global."""
+        key_b = b"B" * 32
+        encrypt, _ = get_cipher("fernet", _RAW_KEY)
+        _, decrypt = get_cipher("fernet", key_b)
+        with pytest.raises(InvalidToken):
+            decrypt(encrypt("secret"))
+
+    def test_wrong_key_raises_invalid_token_aesgcm(self):
+        key_b = b"B" * 32
+        encrypt, _ = get_cipher("aesgcm", _RAW_KEY)
+        _, decrypt = get_cipher("aesgcm", key_b)
+        with pytest.raises(InvalidToken):
+            decrypt(encrypt("secret"))
+
+    def test_cross_algorithm_fernet_token_into_aesgcm_decrypt(self):
+        """A token produced by the 'fernet' pair must be rejected by the
+        'aesgcm' decrypt_fn — get_cipher() isolation guard."""
+        _, decrypt_aesgcm = get_cipher("aesgcm", _RAW_KEY)
+        encrypt_fernet, _ = get_cipher("fernet", _RAW_KEY)
+        with pytest.raises((InvalidToken, ValueError)):
+            decrypt_aesgcm(encrypt_fernet("secret"))
+
+    def test_cross_algorithm_aesgcm_token_into_fernet_decrypt(self):
+        """A token produced by the 'aesgcm' pair must be rejected by the
+        'fernet' decrypt_fn."""
+        _, decrypt_fernet = get_cipher("fernet", _RAW_KEY)
+        encrypt_aesgcm, _ = get_cipher("aesgcm", _RAW_KEY)
+        with pytest.raises((InvalidToken, ValueError)):
+            decrypt_fernet(encrypt_aesgcm("secret"))
+
+    def test_unknown_version_raises_value_error(self):
+        """An unrecognised version string must raise ValueError immediately —
+        never silently fall back to a default algorithm."""
+        with pytest.raises(ValueError, match="Unknown encryption_version"):
+            get_cipher("unknown_v3", _RAW_KEY)
+
+    def test_empty_string_version_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown encryption_version"):
+            get_cipher("", _RAW_KEY)
+
+    def test_case_sensitive_version(self):
+        """'Fernet' (capital F) is not a valid version — must raise ValueError,
+        not silently match 'fernet'."""
+        with pytest.raises(ValueError):
+            get_cipher("Fernet", _RAW_KEY)
 
 
 # ---------------------------------------------------------------------------

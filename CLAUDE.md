@@ -233,12 +233,13 @@ except ValueError:
 | `app/security/encryption.py` | Added `encrypt_field_gcm()` / `decrypt_field_gcm()` — AES-256-GCM with random 12-byte nonce; storage format `base64url(nonce‖ciphertext‖tag)`; `InvalidTag` caught internally and re-raised as `InvalidToken` for caller consistency; Fernet functions kept permanently for legacy-entry decryption; `_GCM_NONCE_BYTES` constant; `AESGCM` + `InvalidTag` imports; updated `__all__` and module docstring |
 | `app/tests/test_encryption.py` | Added `TestDeriveKeyArgon2id` (3 tests): proves Argon2id output differs from PBKDF2HMAC, confirms `Type.ID` variant is used, confirms `Type.I` produces a different result — regression guards for the algorithm upgrade; fixed SonarQube S2068 — renamed local variable `password` → `kdf_input` in two tests to avoid hardcoded-credential false positives |
 | `app/tests/test_encryption.py` | Added `TestEncryptFieldGcm` (11 tests) and `TestDecryptFieldGcm` (14 tests): round-trips, tamper detection (ciphertext, tag, nonce), cross-algorithm isolation guards (Fernet token rejected by GCM and vice versa), full derive→encrypt→decrypt integration |
+| `app/security/encryption.py` | Added `get_cipher(version, key)` factory — returns `(encrypt_fn, decrypt_fn)` closures pre-bound to `key`; routes `"fernet"` → Fernet pair, `"aesgcm"` → GCM pair; raises `ValueError` on unknown version; `Callable` import from `collections.abc`; updated `__all__` |
+| `app/tests/test_encryption.py` | Added `TestGetCipher` (15 tests): round-trips for both versions, token format checks, key-binding verification, wrong-key raises `InvalidToken`, cross-algorithm isolation guards, unknown/empty/wrong-case version raises `ValueError` |
 
 #### ❌ Still To Implement
 
 | File / Area | What's needed |
 |---|---|
-| `app/security/encryption.py` | Add `get_cipher(version, key)` factory function that returns the right algorithm — keeps `if/else` version-routing out of the service layer |
 | `app/models/vault_entry.py` | Add `encryption_version` column (default `"fernet"`; set to `"aesgcm"` after re-encryption) — lets the service layer choose the right algorithm per entry |
 | `app/migrations/` | New Alembic migration for `encryption_version` column (schema only — no data touched) |
 | `app/services/vault_service.py` | Lazy re-encryption on read: if `entry.encryption_version == "fernet"` → decrypt with Fernet → re-encrypt with AES-GCM → save → set `encryption_version = "aesgcm"`; happens transparently while the key is already in session |
