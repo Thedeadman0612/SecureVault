@@ -32,7 +32,19 @@ class VaultEntry(Base):
     website: Mapped[str | None] = mapped_column(String, nullable=True)
     category: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Encrypted fields — stored as Fernet tokens (base64), never plaintext
+    # Encrypted fields — stored as base64 tokens, never plaintext.
+    # encryption_version controls which algorithm is used to read/write them:
+    #   "fernet"  — Phase 1 legacy (AES-128-CBC + HMAC-SHA256 via Fernet)
+    #   "aesgcm"  — Phase 2+ (AES-256-GCM authenticated encryption)
+    # server_default="fernet" ensures existing rows are stamped on migration.
+    # Vault service always writes "aesgcm" for new/updated entries — the
+    # Python-side default="fernet" is a safe fallback, never reached in practice.
+    encryption_version: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="fernet",
+        server_default="fernet",
+    )
     username_encrypted: Mapped[str] = mapped_column(String, nullable=False)
     password_encrypted: Mapped[str] = mapped_column(String, nullable=False)
     notes_encrypted: Mapped[str | None] = mapped_column(String, nullable=True)
