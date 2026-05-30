@@ -223,20 +223,28 @@ except ValueError:
 
 ---
 
-### Phase 2 — Security Hardening — Status: 🔴 Not Started
+### Phase 2 — Security Hardening — Status: 🟡 In Progress
+
+#### ✅ Completed
+
+| File | What was done |
+|---|---|
+| `app/security/encryption.py` | Replaced PBKDF2HMAC key derivation with Argon2id (`hash_secret_raw`, `Type.ID`); OWASP-recommended parameters: `time_cost=3`, `memory_cost=65536` (64 MiB), `parallelism=4`; function signature unchanged so no callers required updating; module docstring updated with upgrade rationale and breaking-change warning |
+| `app/tests/test_encryption.py` | Added `TestDeriveKeyArgon2id` (3 tests): proves Argon2id output differs from PBKDF2HMAC, confirms `Type.ID` variant is used, confirms `Type.I` produces a different result — regression guards for the algorithm upgrade |
+
+#### ❌ Still To Implement
 
 | File / Area | What's needed |
 |---|---|
+| `app/security/encryption.py` | Add AES-256-GCM encrypt/decrypt alongside Fernet; keep Fernet decrypt **permanently** — legacy entries are never force-migrated all at once |
+| `app/security/encryption.py` | Add `get_cipher(version, key)` factory function that returns the right algorithm — keeps `if/else` version-routing out of the service layer |
+| `app/models/vault_entry.py` | Add `encryption_version` column (default `"fernet"`; set to `"aesgcm"` after re-encryption) — lets the service layer choose the right algorithm per entry |
+| `app/migrations/` | New Alembic migration for `encryption_version` column (schema only — no data touched) |
+| `app/services/vault_service.py` | Lazy re-encryption on read: if `entry.encryption_version == "fernet"` → decrypt with Fernet → re-encrypt with AES-GCM → save → set `encryption_version = "aesgcm"`; happens transparently while the key is already in session |
 | `app/middleware/csrf.py` | CSRF protection middleware (`starlette-csrf` or double-submit cookie pattern) |
 | `app/middleware/` or `app/main.py` | Content Security Policy (CSP) response header — `script-src 'self'`, no inline scripts; critical for a password manager where XSS = vault compromise since decrypted secrets are rendered in the browser |
 | `app/main.py` | Switch to an encrypted session backend (e.g. `starlette-session` with `cryptography`) — Phase 1 sessions are signed-only (base64-readable); Phase 2 must make them opaque to the browser |
 | `app/middleware/rate_limit.py` | Login rate limiting + lockout (`slowapi` with `InMemoryLimiter` — no Redis dependency; or manual SQLite-backed attempt counter) |
-| `app/security/encryption.py` | Add AES-256-GCM encrypt/decrypt alongside Fernet; keep Fernet decrypt **permanently** — legacy entries are never force-migrated all at once |
-| `app/security/encryption.py` | Replace PBKDF2HMAC key derivation with Argon2id |
-| `app/models/vault_entry.py` | Add `encryption_version` column (default `"fernet"`; set to `"aesgcm"` after re-encryption) — lets the service layer choose the right algorithm per entry |
-| `app/migrations/` | New Alembic migration for `encryption_version` column (schema only — no data touched) |
-| `app/services/vault_service.py` | Lazy re-encryption on read: if `entry.encryption_version == "fernet"` → decrypt with Fernet → re-encrypt with AES-GCM → save → set `encryption_version = "aesgcm"`; happens transparently while the key is already in session |
-| `app/security/encryption.py` | Add `get_cipher(version, key)` factory function that returns the right algorithm — keeps `if/else` version-routing out of the service layer |
 | `app/main.py` | Set `https_only=True` and `same_site='strict'` on `SessionMiddleware` for production; add environment check to allow `https_only=False` in local dev only; reduce `SESSION_TIMEOUT_MINUTES` default to 10 |
 | `app/main.py` | Wire CSRF middleware into middleware stack |
 

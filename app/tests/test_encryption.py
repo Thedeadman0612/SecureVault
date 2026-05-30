@@ -6,6 +6,7 @@ Unit tests for app/security/encryption.py.
 Covers:
   - generate_kdf_salt: format, randomness, length
   - derive_key: determinism, output length, wrong-length salt raises ValueError
+  - derive_key (Argon2id-specific): proves the Phase 2 algorithm upgrade is active
   - encrypt_field: output format, ciphertext differs from plaintext, IV randomness,
     wrong-length key raises ValueError
   - decrypt_field: roundtrip, wrong key raises InvalidToken, tampered token raises
@@ -133,6 +134,100 @@ class TestDeriveKey:
         salt = generate_kdf_salt()
         key = derive_key("somepassword", salt)
         assert len(key) == 32
+
+
+# ---------------------------------------------------------------------------
+# derive_key — Argon2id algorithm verification (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveKeyArgon2id:
+    """Verify that the Phase 2 Argon2id upgrade is actually in effect.
+
+    These tests are separate from TestDeriveKey so the intent is explicit:
+    we are not just checking that derive_key() works — we are checking that
+    it uses the correct algorithm and will catch any accidental regression
+    back to PBKDF2HMAC.
+    """
+
+    def test_output_differs_from_pbkdf2(self):
+        """Argon2id MUST produce a different key than PBKDF2HMAC for the
+        same (password, salt) pair.
+
+        This is the core regression guard for the Phase 2 upgrade. If this
+        test fails, derive_key() has been silently reverted to PBKDF2HMAC.
+        """
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+        raw_salt = b"S" * 32
+        salt_b64 = base64.urlsafe_b64encode(raw_salt).decode("ascii")
+        password = "testpassword"
+
+        # What PBKDF2HMAC (Phase 1) would have derived.
+        pbkdf2 = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=raw_salt,
+            iterations=600_000,
+        )
+        pbkdf2_key = pbkdf2.derive(password.encode("utf-8"))
+
+        # What Argon2id (Phase 2) derives.
+        argon2id_key = derive_key(password, salt_b64)
+
+        assert argon2id_key != pbkdf2_key, (
+            "derive_key() returned the same output as PBKDF2HMAC — "
+            "the Argon2id upgrade may not be active."
+        )
+
+    def test_uses_argon2id_variant(self):
+        """Confirm derive_key() uses the ID variant (Argon2id), not Argon2i
+        or Argon2d.
+
+        Argon2id combines resistance to side-channel attacks (Argon2i) with
+        resistance to GPU/ASIC attacks (Argon2d). The other variants provide
+        only one of these properties.
+        """
+        from argon2.low_level import Type, hash_secret_raw
+
+        raw_salt = b"T" * 32
+        salt_b64 = base64.urlsafe_b64encode(raw_salt).decode("ascii")
+        password = "verifyvariant"
+
+        # Expected output using Argon2id (Type.ID) directly.
+        expected = hash_secret_raw(
+            secret=password.encode("utf-8"),
+            salt=raw_salt,
+            time_cost=3,
+            memory_cost=65_536,
+            parallelism=4,
+            hash_len=32,
+            type=Type.ID,
+        )
+
+        assert derive_key(password, salt_b64) == expected
+
+    def test_argon2i_variant_produces_different_output(self):
+        """Argon2i (Type.I) must not match our output — confirming we are
+        using Type.ID and not Type.I."""
+        from argon2.low_level import Type, hash_secret_raw
+
+        raw_salt = b"U" * 32
+        salt_b64 = base64.urlsafe_b64encode(raw_salt).decode("ascii")
+        password = "variantcheck"
+
+        argon2i_key = hash_secret_raw(
+            secret=password.encode("utf-8"),
+            salt=raw_salt,
+            time_cost=3,
+            memory_cost=65_536,
+            parallelism=4,
+            hash_len=32,
+            type=Type.I,
+        )
+
+        assert derive_key(password, salt_b64) != argon2i_key
 
 
 # ---------------------------------------------------------------------------

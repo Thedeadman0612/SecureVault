@@ -1,22 +1,34 @@
 """
 app/security/encryption.py
 
-Fernet-based field encryption and PBKDF2HMAC key derivation.
+Fernet-based field encryption and Argon2id key derivation.
 
 This module covers two distinct cryptographic responsibilities:
 
   1. KDF salt generation + key derivation:
        - generate_kdf_salt()  — produces a random 32-byte salt, base64-encoded,
                                  for storage in users.kdf_salt.
-       - derive_key()         — runs PBKDF2HMAC(SHA-256, 600_000 iterations) to
-                                 produce a 32-byte encryption key from the master
-                                 password and the stored salt. The key is held in
-                                 session memory only — never written to disk.
+       - derive_key()         — runs Argon2id (time_cost=3, memory_cost=64 MiB,
+                                 parallelism=4) to produce a 32-byte encryption
+                                 key from the master password and the stored salt.
+                                 The key is held in session memory only — never
+                                 written to disk.
 
   2. Vault field encryption / decryption:
        - encrypt_field()  — encrypts a plaintext string with Fernet, returns a
                             base64 token string for storage in the DB.
        - decrypt_field()  — decrypts a stored Fernet token back to plaintext.
+
+PHASE 2 UPGRADE — PBKDF2HMAC → Argon2id:
+  Phase 1 used PBKDF2HMAC (SHA-256, 600,000 iterations). Argon2id is
+  memory-hard: it requires both CPU time AND RAM, making GPU/ASIC
+  brute-force attacks orders of magnitude more expensive. The function
+  signature of derive_key() is unchanged — no callers need updating.
+
+  ⚠️  Breaking change: Argon2id derives a DIFFERENT key from the same
+  (password, salt) pair than PBKDF2HMAC did. Existing Phase 1 vaults
+  will fail to decrypt after this upgrade. Delete securevault.db and
+  re-run /setup to create a fresh vault.
 
 KEY ENCODING NOTE:
   derive_key() returns raw 32 bytes.
@@ -37,9 +49,8 @@ SECURITY INVARIANTS — never violate these:
 import base64
 import os
 
+from argon2.low_level import Type, hash_secret_raw
 from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # Re-export InvalidToken so callers import it from this module rather than
 # reaching into cryptography internals:
@@ -54,18 +65,27 @@ __all__ = [
     "InvalidToken",
 ]
 
-# PBKDF2HMAC iteration count — NIST SP 800-132 recommends ≥310,000 for SHA-256
-# as of 2023; OWASP recommends 600,000. Phase 2 can upgrade to Argon2id.
-_PBKDF2_ITERATIONS: int = 600_000
-
 # Salt length in bytes. 32 bytes (256 bits) exceeds the 16-byte minimum and
 # provides substantial resistance against precomputed rainbow tables.
 _SALT_BYTES: int = 32
 
-# Derived key length in bytes. Fernet uses AES-128 internally, but we derive
-# 32 bytes because PBKDF2 output length should match the hash output size
-# (SHA-256 → 32 bytes). base64.urlsafe_b64encode(32 bytes) → 44-byte Fernet key.
+# Derived key length in bytes. 32 bytes (256 bits) used for both Fernet
+# (which base64-encodes this to a 44-byte key internally) and AES-256-GCM
+# (added in Task 2).
 _KEY_BYTES: int = 32
+
+# Argon2id parameters — OWASP recommended minimums for interactive login
+# (https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html):
+#   time_cost   = 3 iterations through memory
+#   memory_cost = 64 MiB (65536 KiB)  ← the "memory-hard" property;
+#                                        GPU/ASIC attacks require this RAM per guess
+#   parallelism = 4 parallel threads
+#
+# Changing these constants after deployment is a BREAKING CHANGE — all existing
+# vaults would derive a different key and become permanently unrecoverable.
+_ARGON2_TIME_COST: int = 3
+_ARGON2_MEMORY_COST: int = 65_536   # KiB → 64 MiB
+_ARGON2_PARALLELISM: int = 4
 
 
 def generate_kdf_salt() -> str:
@@ -95,12 +115,20 @@ def generate_kdf_salt() -> str:
 def derive_key(master_password: str, kdf_salt_b64: str) -> bytes:
     """Derive a 32-byte encryption key from the master password and stored salt.
 
-    Uses PBKDF2HMAC with SHA-256 and 600,000 iterations. The derivation is
-    deterministic: identical (password, salt) pairs always produce the same key.
-    This is what allows the vault to be decrypted on every login without storing
+    Uses Argon2id with OWASP-recommended interactive parameters (time_cost=3,
+    memory_cost=64 MiB, parallelism=4). The derivation is deterministic:
+    identical (password, salt) pairs always produce the same key, which is
+    what allows the vault to be decrypted on every login without storing
     the key anywhere.
 
-    The returned raw bytes are what the session stores in memory. They are NOT
+    Why Argon2id over PBKDF2HMAC (Phase 1):
+      PBKDF2 is CPU-only — an attacker with a GPU farm can test billions of
+      password guesses per second. Argon2id requires a fixed amount of RAM
+      per guess (64 MiB here), so GPU/ASIC attacks gain far less parallelism.
+      An attacker needs 64 MiB × (number of parallel guesses), making
+      large-scale brute-force economically impractical.
+
+    The returned raw bytes are held in session memory only. They are NOT
     suitable for passing directly to Fernet(); use encrypt_field() /
     decrypt_field() which handle the base64 encoding step internally.
 
@@ -116,10 +144,10 @@ def derive_key(master_password: str, kdf_salt_b64: str) -> bytes:
         ValueError: If kdf_salt_b64 is not valid base64 or decodes to the wrong
             length (indicates data corruption in users.kdf_salt).
     """
-    # Decode the base64 salt back to raw bytes for use as the PBKDF2 salt.
+    # Decode the base64 salt back to raw bytes.
     raw_salt: bytes = base64.urlsafe_b64decode(kdf_salt_b64.encode("ascii"))
 
-    # Validate the decoded length. PBKDF2 accepts any salt length, so a
+    # Validate the decoded length. Argon2id accepts any salt length, so a
     # corrupt kdf_salt column would silently produce the wrong key — making
     # all vault entries permanently unrecoverable. Fail loudly instead.
     if len(raw_salt) != _SALT_BYTES:
@@ -128,17 +156,19 @@ def derive_key(master_password: str, kdf_salt_b64: str) -> bytes:
             f"got {len(raw_salt)}. Possible data corruption in users.kdf_salt."
         )
 
-    # PBKDF2HMAC instances are single-use — construct a new one each call.
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=_KEY_BYTES,
+    # hash_secret_raw() returns raw bytes (no PHC string wrapping), which is
+    # exactly what we need for a KDF. This is the low-level API of argon2-cffi;
+    # the high-level PasswordHasher is for password storage, not key derivation.
+    raw_key: bytes = hash_secret_raw(
+        secret=master_password.encode("utf-8"),
         salt=raw_salt,
-        iterations=_PBKDF2_ITERATIONS,
+        time_cost=_ARGON2_TIME_COST,
+        memory_cost=_ARGON2_MEMORY_COST,
+        parallelism=_ARGON2_PARALLELISM,
+        hash_len=_KEY_BYTES,
+        type=Type.ID,   # Argon2id — the "ID" variant combines resistance to
+                        # side-channel attacks (Argon2i) and GPU attacks (Argon2d)
     )
-
-    # Encode the password as UTF-8 to correctly handle any non-ASCII characters
-    # the user may have included in their master password.
-    raw_key: bytes = kdf.derive(master_password.encode("utf-8"))
     return raw_key
 
 
