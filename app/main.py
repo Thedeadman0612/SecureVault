@@ -6,7 +6,9 @@ global error handlers.
 
 MIDDLEWARE ORDER (outermost → innermost, i.e. request processing order):
   1. SessionMiddleware  — decodes the signed session cookie into request.session.
-  2. AuthGuard          — inspects request.session["encryption_key"]; redirects
+  2. CSRFMiddleware     — generates/validates the CSRF token stored in the session;
+                          exposes it via request.state.csrf_token for templates.
+  3. AuthGuard          — inspects request.session["encryption_key"]; redirects
                           unauthenticated requests to /login before any route
                           handler is invoked.
 
@@ -15,7 +17,12 @@ MIDDLEWARE ORDER (outermost → innermost, i.e. request processing order):
   it runs first:
 
     app.add_middleware(AuthGuard)              # added first → innermost
+    app.add_middleware(CSRFMiddleware)         # added second → middle
     app.add_middleware(SessionMiddleware, ...) # added last  → outermost
+
+  CSRFMiddleware sits between SessionMiddleware and AuthGuard so that:
+    - It has access to request.session (populated by the outer SessionMiddleware).
+    - It protects the auth-exempt paths (/login, /setup) that AuthGuard skips.
 
 GLOBAL ERROR HANDLERS:
   404 Not Found         — generic HTML page; no internal path or DB detail.
@@ -39,6 +46,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config.settings import settings
 from app.middleware.auth_guard import AuthGuard
+from app.middleware.csrf import CSRFMiddleware
 from app.routes import auth, vault
 
 logger = logging.getLogger(__name__)
@@ -71,6 +79,10 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # AuthGuard — innermost; reads the session set up by SessionMiddleware.
 app.add_middleware(AuthGuard)
+
+# CSRFMiddleware — middle; needs session (set by outer SessionMiddleware);
+# sits outside AuthGuard so that /login and /setup are also CSRF-protected.
+app.add_middleware(CSRFMiddleware)
 
 # SessionMiddleware — outermost; decodes the signed cookie first.
 #

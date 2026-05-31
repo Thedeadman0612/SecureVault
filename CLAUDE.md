@@ -241,16 +241,18 @@ except ValueError:
 | `app/tests/test_vault_service.py` | Added `decrypt_field_gcm` import; fixed two existing assertions that checked for Fernet `"gAAAAA"` prefix (now verify `encryption_version=="aesgcm"` + GCM round-trip); added `TestEncryptionVersioning` (7 tests): new entries store `"aesgcm"`, `get_entry` / `get_entries` upgrade legacy Fernet rows, version stays `"fernet"` on wrong-key failure, update of sensitive field stamps `"aesgcm"`, plaintext-only update still triggers lazy re-encryption via `_decrypt_entry(db=db)` |
 | `app/config/settings.py` | Added `ENVIRONMENT: str = "production"` field — fail-secure default; drives `https_only` on `SessionMiddleware` in `main.py`; set to `"development"` in `.env` to allow `http://` during local dev; changed `SESSION_TIMEOUT_MINUTES` default from 30 → 10 per OWASP Session Management Cheat Sheet §Session Expiration |
 | `app/main.py` | `https_only` now driven by `settings.ENVIRONMENT != "development"` (True in production, False only in local dev); `same_site` hardened from `"lax"` → `"strict"` (strongest SameSite policy — cookie never sent on any cross-site request); inline comments explain both decisions; `.env` and `.env.example` updated with `ENVIRONMENT` variable documentation |
+| `app/middleware/csrf.py` | New — Synchronizer Token Pattern CSRF protection via `BaseHTTPMiddleware`; token generated with `secrets.token_hex(32)` (256 bits) and stored in `session["csrf_token"]`; exposed via `request.state.csrf_token` for templates; mutating methods (POST/PUT/PATCH/DELETE) validated with `secrets.compare_digest`; 403 on missing or mismatched token; `await request.body()` called before `await request.form()` to pre-set `_body` on Starlette's `_CachedRequest` so downstream route handlers receive the full body via `wrapped_receive()` (avoids empty-body 422 bug) |
+| `app/main.py` | `CSRFMiddleware` imported and wired between `AuthGuard` (inner) and `SessionMiddleware` (outer) — has session access, protects auth-exempt paths `/login` and `/setup`; module docstring updated to document three-layer middleware order |
+| `app/templates/` (5 files) | Added `<input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">` to all 8 POST forms across `login.html`, `setup.html`, `vault.html` (logout nav), `entry_form.html` (logout nav + entry form), `entry_detail.html` (logout nav + delete form) |
+| `app/tests/test_auth_routes.py` | Added `_get_csrf_token(client, url)` helper (GET + regex parse); updated both fixtures (`client_with_vault`, `authenticated_client`) and all POST test calls to include CSRF token; added `TestCSRFProtection` class (7 tests): 403 on missing token, 403 on wrong token, GET never blocked, token present in login/setup forms, token is 64 hex chars, token stable across requests in same session |
 
 #### ❌ Still To Implement
 
 | File / Area | What's needed |
 |---|---|
-| `app/middleware/csrf.py` | CSRF protection middleware (`starlette-csrf` or double-submit cookie pattern) |
 | `app/middleware/` or `app/main.py` | Content Security Policy (CSP) response header — `script-src 'self'`, no inline scripts; critical for a password manager where XSS = vault compromise since decrypted secrets are rendered in the browser |
 | `app/main.py` | Switch to an encrypted session backend (e.g. `starlette-session` with `cryptography`) — Phase 1 sessions are signed-only (base64-readable); Phase 2 must make them opaque to the browser |
 | `app/middleware/rate_limit.py` | Login rate limiting + lockout (`slowapi` with `InMemoryLimiter` — no Redis dependency; or manual SQLite-backed attempt counter) |
-| `app/main.py` | Wire CSRF middleware into middleware stack |
 
 > ⚠️ **Re-encryption cannot run in Alembic** — the encryption key only exists in session memory after login and must never touch disk. Alembic adds the `encryption_version` column only. The actual re-encryption is a lazy per-entry operation in `vault_service` at first read after upgrade. All read/write paths must check `encryption_version` and call the correct algorithm.
 

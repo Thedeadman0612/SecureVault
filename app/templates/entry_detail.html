@@ -7,6 +7,7 @@
   <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
     <a href="/vault" class="text-indigo-600 font-semibold text-lg">🔒 SecureVault</a>
     <form method="POST" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
       <button
         type="submit"
         class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
@@ -52,6 +53,7 @@
         action="/entry/{{ entry.id }}/delete"
         onsubmit="return confirm('Delete this entry? This cannot be undone.')"
       >
+        <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
         <button
           type="submit"
           class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg
