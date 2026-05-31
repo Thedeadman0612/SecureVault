@@ -73,13 +73,23 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.add_middleware(AuthGuard)
 
 # SessionMiddleware — outermost; decodes the signed cookie first.
+#
+# https_only: True in every environment except local development.
+#   Prevents the session cookie from being transmitted over plain HTTP.
+#   Controlled by ENVIRONMENT setting — defaults to "production" (fail-secure).
+#   Set ENVIRONMENT=development in .env to allow http:// during local dev.
+#
+# same_site: "strict" — cookie is never sent on cross-site requests at all,
+#   including top-level navigation POSTs from other origins.  This is the
+#   strongest SameSite policy and complements the CSRF token (Sub-task 2).
+#   Acceptable UX trade-off for a local-first password manager.
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.SECRET_KEY,
     max_age=settings.SESSION_TIMEOUT_MINUTES * 60,
-    session_cookie="sv_session",   # non-default name avoids collisions
-    https_only=False,              # Phase 1: local dev; set True in Phase 2
-    same_site="lax",               # Phase 2: harden to "strict" with CSRF token
+    session_cookie="sv_session",                              # non-default name avoids collisions
+    https_only=settings.ENVIRONMENT != "development",         # False only in local dev
+    same_site="strict",                                       # hardened from "lax" in Phase 2
 )
 
 # ---------------------------------------------------------------------------
