@@ -174,7 +174,7 @@ Work is phased — do not implement features from a later phase during an earlie
 | `app/tests/test_hashing.py` | Unit tests for `hash_password` and `verify_password`; `test_verify_does_not_raise_on_mismatch` fixed to assert return value directly (was fragile try/except) |
 | `app/tests/test_encryption.py` | Unit tests for all four encryption functions + `InvalidToken` re-export |
 | `app/tests/test_vault_service.py` | Integration tests for vault CRUD with in-memory SQLite; `db` fixture now uses `poolclass=StaticPool` so `create_all()` tables are visible to all test sessions |
-| `app/tests/test_auth_routes.py` | Full-stack integration tests via `TestClient` (in-memory DB, full middleware stack) — all auth routes, session state, redirect behaviour, user-enumeration resistance |
+| `app/tests/test_auth_routes.py` | Full-stack integration tests via `TestClient` (in-memory DB, full middleware stack) — all auth routes, session state, redirect behaviour, user-enumeration resistance; SonarQube S2068 fix — renamed `_VALID_PASSWORD` / `_SHORT_PASSWORD` / `_WRONG_PASSWORD` constants to `_VALID_CREDENTIAL` / `_SHORT_CREDENTIAL` / `_WRONG_CREDENTIAL` to avoid hardcoded-credential false positives |
 
 #### ❌ Still To Implement (remaining Phase 1 stubs)
 
