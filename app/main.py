@@ -5,24 +5,31 @@ FastAPI application factory: middleware stack, routers, static files, and
 global error handlers.
 
 MIDDLEWARE ORDER (outermost → innermost, i.e. request processing order):
-  1. SessionMiddleware  — decodes the signed session cookie into request.session.
-  2. CSRFMiddleware     — generates/validates the CSRF token stored in the session;
+  1. CSPMiddleware      — stamps Content-Security-Policy header on every response.
+                          Outermost so it covers error pages from inner layers too.
+  2. SessionMiddleware  — decodes the signed session cookie into request.session.
+  3. CSRFMiddleware     — generates/validates the CSRF token stored in the session;
                           exposes it via request.state.csrf_token for templates.
-  3. AuthGuard          — inspects request.session["encryption_key"]; redirects
+  4. AuthGuard          — inspects request.session["encryption_key"]; redirects
                           unauthenticated requests to /login before any route
                           handler is invoked.
 
   In FastAPI/Starlette, add_middleware() stacks in reverse — the LAST call
-  produces the OUTERMOST layer. So SessionMiddleware is added last to ensure
-  it runs first:
+  produces the OUTERMOST layer.  Add order:
 
-    app.add_middleware(AuthGuard)              # added first → innermost
-    app.add_middleware(CSRFMiddleware)         # added second → middle
-    app.add_middleware(SessionMiddleware, ...) # added last  → outermost
+    app.add_middleware(AuthGuard)              # added first  → innermost
+    app.add_middleware(CSRFMiddleware)         # added second → middle-inner
+    app.add_middleware(SessionMiddleware, ...) # added third  → middle-outer
+    app.add_middleware(CSPMiddleware)          # added last   → outermost
 
   CSRFMiddleware sits between SessionMiddleware and AuthGuard so that:
     - It has access to request.session (populated by the outer SessionMiddleware).
     - It protects the auth-exempt paths (/login, /setup) that AuthGuard skips.
+
+  CSPMiddleware sits outside SessionMiddleware because:
+    - It adds a response header and needs no session data.
+    - Being outermost ensures ALL responses get the header, including CSRF 403
+      and Session error pages produced before any route handler runs.
 
 GLOBAL ERROR HANDLERS:
   404 Not Found         — generic HTML page; no internal path or DB detail.
@@ -47,6 +54,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config.settings import settings
 from app.middleware.auth_guard import AuthGuard
 from app.middleware.csrf import CSRFMiddleware
+from app.middleware.csp import CSPMiddleware
 from app.routes import auth, vault
 
 logger = logging.getLogger(__name__)
@@ -84,7 +92,7 @@ app.add_middleware(AuthGuard)
 # sits outside AuthGuard so that /login and /setup are also CSRF-protected.
 app.add_middleware(CSRFMiddleware)
 
-# SessionMiddleware — outermost; decodes the signed cookie first.
+# SessionMiddleware — middle-outer; decodes the signed cookie first.
 #
 # https_only: True in every environment except local development.
 #   Prevents the session cookie from being transmitted over plain HTTP.
@@ -103,6 +111,11 @@ app.add_middleware(
     https_only=settings.ENVIRONMENT != "development",         # False only in local dev
     same_site="strict",                                       # hardened from "lax" in Phase 2
 )
+
+# CSPMiddleware — outermost; added last so it wraps every other layer.
+# Stamps Content-Security-Policy on ALL responses including CSRF/session errors.
+# Needs no session data, so placement relative to SessionMiddleware is flexible.
+app.add_middleware(CSPMiddleware)
 
 # ---------------------------------------------------------------------------
 # Routers
