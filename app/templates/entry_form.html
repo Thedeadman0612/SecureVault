@@ -135,10 +135,10 @@
           class="w-full px-3 py-2 pr-16 border border-gray-300 rounded-lg text-sm
                  focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
         >
+        {# onclick removed — event listener attached in entry_form.js (CSP compliance). #}
         <button
           type="button"
           id="toggle-form-password"
-          onclick="toggleVisibility('form-password', 'toggle-form-password')"
           class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-indigo-600
                  hover:text-indigo-800 font-medium"
         >
@@ -187,13 +187,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-  function toggleVisibility(inputId, btnId) {
-    const input = document.getElementById(inputId);
-    const btn   = document.getElementById(btnId);
-    const show  = input.type === 'password';
-    input.type  = show ? 'text' : 'password';
-    btn.textContent = show ? 'Hide' : 'Show';
-  }
-</script>
+  {# External file — inline scripts blocked by CSP's script-src 'self'. #}
+  <script src="/static/js/entry_form.js"></script>
 {% endblock %}
