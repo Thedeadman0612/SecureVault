@@ -4,8 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}SecureVault{% endblock %}</title>
-  {# Tailwind CDN — Phase 1 only. Replace with compiled CSS in Phase 5. #}
-  <script src="https://cdn.tailwindcss.com"></script>
+  {#
+    Tailwind Play CDN served from /static/js/ (self-hosted since Phase 2).
+    Serving it locally means script-src 'self' is sufficient — no external
+    CDN domain is needed in the Content-Security-Policy header.
+    Phase 5 will replace this with a compiled CSS file (no JS at all).
+  #}
+  <script src="/static/js/tailwind.min.js"></script>
 </head>
 <body class="bg-gray-50 min-h-screen text-gray-900 antialiased">
 
