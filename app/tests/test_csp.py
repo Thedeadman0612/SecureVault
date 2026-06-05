@@ -36,7 +36,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.database.session import get_db
 from app.main import app
-from app.middleware.csp import CSP_HEADER_VALUE, _CSP_DIRECTIVES
+from app.middleware.csp import (
+    CSP_HEADER_VALUE,
+    _CSP_DIRECTIVES,
+    _X_FRAME_OPTIONS_VALUE,
+    _X_CONTENT_TYPE_OPTIONS_VALUE,
+)
 from app.models.user import Base
 
 # ---------------------------------------------------------------------------
@@ -220,3 +225,44 @@ class TestCSPDirectiveValues:
                 f"Directive '{directive}' defined in _CSP_DIRECTIVES "
                 f"but missing from the live CSP header"
             )
+
+
+# ---------------------------------------------------------------------------
+# Test: defence-in-depth headers (X-Frame-Options, X-Content-Type-Options)
+# ---------------------------------------------------------------------------
+
+
+class TestDefenceInDepthHeaders:
+    """X-Frame-Options and X-Content-Type-Options must be present on every response.
+
+    These complement the CSP policy for browsers that pre-date CSP or do not
+    fully enforce frame-ancestors / MIME-sniffing controls.
+    """
+
+    def test_x_frame_options_present_on_login(self, client: TestClient):
+        r = client.get("/login")
+        assert r.headers.get("x-frame-options") == _X_FRAME_OPTIONS_VALUE
+
+    def test_x_frame_options_present_on_redirect(self, client: TestClient):
+        """X-Frame-Options must also appear on 302 redirect responses."""
+        r = client.get("/vault", follow_redirects=False)
+        assert r.headers.get("x-frame-options") == _X_FRAME_OPTIONS_VALUE
+
+    def test_x_frame_options_present_on_csrf_403(self, client: TestClient):
+        """X-Frame-Options must appear on inner-middleware error responses (403)."""
+        r = client.post("/login", data={"csrf_token": ""})
+        assert r.status_code == 403
+        assert r.headers.get("x-frame-options") == _X_FRAME_OPTIONS_VALUE
+
+    def test_x_content_type_options_present_on_login(self, client: TestClient):
+        r = client.get("/login")
+        assert r.headers.get("x-content-type-options") == _X_CONTENT_TYPE_OPTIONS_VALUE
+
+    def test_x_content_type_options_present_on_redirect(self, client: TestClient):
+        r = client.get("/vault", follow_redirects=False)
+        assert r.headers.get("x-content-type-options") == _X_CONTENT_TYPE_OPTIONS_VALUE
+
+    def test_x_content_type_options_present_on_csrf_403(self, client: TestClient):
+        r = client.post("/login", data={"csrf_token": ""})
+        assert r.status_code == 403
+        assert r.headers.get("x-content-type-options") == _X_CONTENT_TYPE_OPTIONS_VALUE

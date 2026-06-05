@@ -49,9 +49,18 @@ connect-src 'self'
 
 frame-ancestors 'none'
     Disallows embedding this app in an <iframe>, <frame>, <object>, or
-    <embed> from any origin — clickjacking protection.  More granular than
-    the legacy X-Frame-Options: DENY header (both should be set; X-Frame-
-    Options is for older browsers that don't support CSP's frame-ancestors).
+    <embed> from any origin — clickjacking protection.
+
+X-Frame-Options: DENY
+    Legacy clickjacking protection for browsers that pre-date CSP's
+    frame-ancestors (IE 11, older Edge, some mobile browsers).  Redundant
+    with frame-ancestors 'none' but set alongside it per defence-in-depth.
+
+X-Content-Type-Options: nosniff
+    Instructs browsers never to MIME-sniff a response away from its declared
+    Content-Type.  Without this, IE/Chrome on some versions could interpret a
+    malformed response body as JavaScript and execute it — bypassing the
+    script-src 'self' restriction.  One-liner with no downside.
 
 base-uri 'self'
     Prevents a <base href="https://evil.com"> injection from redirecting all
@@ -120,6 +129,17 @@ CSP_HEADER_VALUE: str = "; ".join(
 # aliases we don't need for this local-first app.
 _CSP_HEADER_NAME = "Content-Security-Policy"
 
+# Legacy clickjacking guard for browsers that pre-date CSP's frame-ancestors.
+# Set alongside frame-ancestors 'none' in the CSP header — redundancy is
+# intentional here (defence-in-depth).
+_X_FRAME_OPTIONS_NAME  = "X-Frame-Options"
+_X_FRAME_OPTIONS_VALUE = "DENY"
+
+# Prevents MIME-type sniffing: the browser must honour the declared
+# Content-Type and never guess that a non-script resource is JavaScript.
+_X_CONTENT_TYPE_OPTIONS_NAME  = "X-Content-Type-Options"
+_X_CONTENT_TYPE_OPTIONS_VALUE = "nosniff"
+
 
 # ---------------------------------------------------------------------------
 # Middleware
@@ -127,18 +147,23 @@ _CSP_HEADER_NAME = "Content-Security-Policy"
 
 
 class CSPMiddleware(BaseHTTPMiddleware):
-    """Stamp every HTTP response with a Content-Security-Policy header.
+    """Stamp every HTTP response with security headers.
 
-    This middleware sits at the outermost layer of the stack so it adds the
-    CSP header to ALL responses — including error pages produced by inner
-    middleware before a route handler is ever invoked.
+    This middleware sits at the outermost layer of the stack so it adds headers
+    to ALL responses — including error pages produced by inner middleware before
+    a route handler is ever invoked.
 
-    No request-side logic is needed: the header is added on the response path
-    only.  The implementation is intentionally minimal — a response header
-    add with no branching.
+    Headers set on every response:
+      Content-Security-Policy     — primary XSS + clickjacking defence.
+      X-Frame-Options: DENY       — legacy clickjacking guard (pre-CSP browsers).
+      X-Content-Type-Options: nosniff — blocks MIME-type sniffing attacks.
+
+    No request-side logic is needed: headers are added on the response path only.
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
         response.headers[_CSP_HEADER_NAME] = CSP_HEADER_VALUE
+        response.headers[_X_FRAME_OPTIONS_NAME] = _X_FRAME_OPTIONS_VALUE
+        response.headers[_X_CONTENT_TYPE_OPTIONS_NAME] = _X_CONTENT_TYPE_OPTIONS_VALUE
         return response
