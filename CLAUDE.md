@@ -254,11 +254,14 @@ except ValueError:
 | `app/templates/base.html`, `entry_detail.html`, `entry_form.html` | Removed all 3 inline `<script>` blocks and 7 inline `onclick`/`onsubmit` event handler attributes; replaced with `<script src="/static/js/...">` external file references; `entry.password` server-rendered value moved from a JS string literal to `<input type="hidden" id="sv-password-value" value="{{ entry.password }}">` (CSP-safe and equivalent security — password is in HTML either way) |
 | `app/tests/test_csp.py` | New — 14 tests in two classes: `TestCSPHeaderPresence` (header present on GET, unauthenticated redirect, CSRF 403, unknown-path redirect; value matches `CSP_HEADER_VALUE` constant) and `TestCSPDirectiveValues` (`script-src` has no `unsafe-inline`/`unsafe-eval`, `frame-ancestors 'none'`, `form-action 'self'`, `object-src 'none'`, `base-uri 'self'`, `connect-src 'self'`; all `_CSP_DIRECTIVES` keys present in live header) |
 
+| `app/middleware/encrypted_session.py` | New — replaces `SessionMiddleware`; Fernet (AES-128-CBC + HMAC-SHA256) encrypts the full cookie payload so the session is opaque; `_derive_fernet_key()` uses HKDF-SHA256 on `SECRET_KEY` (no new env variable); `ttl=max_age` enforces session expiry at the crypto layer; tampered/expired cookies log a warning and return `{}`; logout triggers `Max-Age=0` delete-cookie; raw ASGI `__call__` pattern (same as Starlette's own `SessionMiddleware`) |
+| `app/main.py` | Removed `SessionMiddleware` import; added `EncryptedSessionMiddleware` with identical parameters and stack position; module docstring updated to reflect four-layer middleware stack with encrypted sessions |
+| `app/tests/test_encrypted_session.py` | New — 20 tests: `TestCookieIsOpaque` (Phase 1 base64-decode attack fails; Fernet decrypt succeeds with correct key; wrong key raises `InvalidToken`), `TestSessionRoundTrip` (write→read, empty before write, persists across requests, cookie refreshed each response), `TestTamperedCookie` (empty session, `Max-Age=0` delete header, fresh session after clear), `TestLogoutDeletesCookie` (`Max-Age=0` on `session.clear()`, empty after clear, no spurious header when session never existed), `TestKeyDerivation` (deterministic, different secrets differ, valid Fernet key, 44-char base64url), plus integration test confirming vault cookie is opaque end-to-end |
+
 #### ❌ Still To Implement
 
 | File / Area | What's needed |
 |---|---|
-| `app/main.py` | Switch to an encrypted session backend (e.g. `starlette-session` with `cryptography`) — Phase 1 sessions are signed-only (base64-readable); Phase 2 must make them opaque to the browser |
 | `app/middleware/rate_limit.py` | Login rate limiting + lockout (`slowapi` with `InMemoryLimiter` — no Redis dependency; or manual SQLite-backed attempt counter) |
 
 > ⚠️ **Re-encryption cannot run in Alembic** — the encryption key only exists in session memory after login and must never touch disk. Alembic adds the `encryption_version` column only. The actual re-encryption is a lazy per-entry operation in `vault_service` at first read after upgrade. All read/write paths must check `encryption_version` and call the correct algorithm.

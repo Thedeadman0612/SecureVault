@@ -5,31 +5,30 @@ FastAPI application factory: middleware stack, routers, static files, and
 global error handlers.
 
 MIDDLEWARE ORDER (outermost → innermost, i.e. request processing order):
-  1. CSPMiddleware      — stamps Content-Security-Policy header on every response.
-                          Outermost so it covers error pages from inner layers too.
-  2. SessionMiddleware  — decodes the signed session cookie into request.session.
-  3. CSRFMiddleware     — generates/validates the CSRF token stored in the session;
-                          exposes it via request.state.csrf_token for templates.
-  4. AuthGuard          — inspects request.session["encryption_key"]; redirects
-                          unauthenticated requests to /login before any route
-                          handler is invoked.
+  1. CSPMiddleware               — stamps Content-Security-Policy on every response.
+                                    Outermost so it covers error pages from inner layers.
+  2. EncryptedSessionMiddleware  — decrypts the session cookie (Fernet AES) into
+                                    scope["session"] = request.session.  Replaced the
+                                    Phase 1 signed-only SessionMiddleware in Phase 2.
+  3. CSRFMiddleware              — generates/validates the CSRF token stored in session;
+                                    exposes it via request.state.csrf_token for templates.
+  4. AuthGuard                   — inspects request.session["encryption_key"]; redirects
+                                    unauthenticated requests to /login.
 
   In FastAPI/Starlette, add_middleware() stacks in reverse — the LAST call
   produces the OUTERMOST layer.  Add order:
 
-    app.add_middleware(AuthGuard)              # added first  → innermost
-    app.add_middleware(CSRFMiddleware)         # added second → middle-inner
-    app.add_middleware(SessionMiddleware, ...) # added third  → middle-outer
-    app.add_middleware(CSPMiddleware)          # added last   → outermost
+    app.add_middleware(AuthGuard)                          # added first  → innermost
+    app.add_middleware(CSRFMiddleware)                     # added second → middle-inner
+    app.add_middleware(EncryptedSessionMiddleware, ...)    # added third  → middle-outer
+    app.add_middleware(CSPMiddleware)                      # added last   → outermost
 
-  CSRFMiddleware sits between SessionMiddleware and AuthGuard so that:
-    - It has access to request.session (populated by the outer SessionMiddleware).
-    - It protects the auth-exempt paths (/login, /setup) that AuthGuard skips.
+  EncryptedSessionMiddleware sits outside CSRFMiddleware because CSRFMiddleware
+  reads/writes request.session (the decrypted dict) — the session must be
+  populated before CSRF inspection runs.
 
-  CSPMiddleware sits outside SessionMiddleware because:
-    - It adds a response header and needs no session data.
-    - Being outermost ensures ALL responses get the header, including CSRF 403
-      and Session error pages produced before any route handler runs.
+  CSPMiddleware is outermost because it adds a response header that must appear
+  on ALL responses, including CSRF 403s and session-layer error responses.
 
 GLOBAL ERROR HANDLERS:
   404 Not Found         — generic HTML page; no internal path or DB detail.
@@ -49,12 +48,11 @@ import logging
 from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.sessions import SessionMiddleware
-
 from app.config.settings import settings
 from app.middleware.auth_guard import AuthGuard
 from app.middleware.csrf import CSRFMiddleware
 from app.middleware.csp import CSPMiddleware
+from app.middleware.encrypted_session import EncryptedSessionMiddleware
 from app.routes import auth, vault
 
 logger = logging.getLogger(__name__)
@@ -92,24 +90,24 @@ app.add_middleware(AuthGuard)
 # sits outside AuthGuard so that /login and /setup are also CSRF-protected.
 app.add_middleware(CSRFMiddleware)
 
-# SessionMiddleware — middle-outer; decodes the signed cookie first.
+# EncryptedSessionMiddleware — middle-outer; ENCRYPTS (not just signs) the
+# session cookie so that the vault encryption key stored in the session is
+# opaque to anyone who can read the raw cookie value.
 #
-# https_only: True in every environment except local development.
-#   Prevents the session cookie from being transmitted over plain HTTP.
-#   Controlled by ENVIRONMENT setting — defaults to "production" (fail-secure).
-#   Set ENVIRONMENT=development in .env to allow http:// during local dev.
+# Uses Fernet (AES-128-CBC + HMAC-SHA256) with a key derived from SECRET_KEY
+# via HKDF-SHA256.  Replaces the Phase 1 SessionMiddleware which only signed
+# the cookie with itsdangerous (payload was base64-readable without the key).
 #
-# same_site: "strict" — cookie is never sent on cross-site requests at all,
-#   including top-level navigation POSTs from other origins.  This is the
-#   strongest SameSite policy and complements the CSRF token (Sub-task 2).
-#   Acceptable UX trade-off for a local-first password manager.
+# Parameter meanings are identical to the old SessionMiddleware:
+#   https_only: True in production; False only with ENVIRONMENT=development.
+#   same_site:  "strict" — cookie never sent on any cross-site request.
 app.add_middleware(
-    SessionMiddleware,
+    EncryptedSessionMiddleware,
     secret_key=settings.SECRET_KEY,
     max_age=settings.SESSION_TIMEOUT_MINUTES * 60,
-    session_cookie="sv_session",                              # non-default name avoids collisions
-    https_only=settings.ENVIRONMENT != "development",         # False only in local dev
-    same_site="strict",                                       # hardened from "lax" in Phase 2
+    session_cookie="sv_session",                           # non-default name avoids collisions
+    https_only=settings.ENVIRONMENT != "development",      # False only in local dev
+    same_site="strict",                                    # hardened from "lax" in Phase 2
 )
 
 # CSPMiddleware — outermost; added last so it wraps every other layer.
