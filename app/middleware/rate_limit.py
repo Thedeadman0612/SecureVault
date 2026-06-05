@@ -34,6 +34,9 @@ threading.Lock for safety) is sufficient.  Advantages over SQLite:
 Disadvantage: counters reset on server restart.  Acceptable — this is a
 personal vault, not a bank.  A restart during an attack window is rare and
 the attacker would need to start counting again from zero.
+Sub-lockout records (failures that never reached max_failures) are evicted
+after _DEFAULT_FAILURE_WINDOW_SECONDS (1 hour) of inactivity so the dict
+does not grow unboundedly under a slow-crawl attack from many IPs.
 
 MIDDLEWARE POSITION IN STACK (main.py add_middleware call order)
 ----------------------------------------------------------------
@@ -63,8 +66,8 @@ revisit this if a proxy is added.
 
 import logging
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from threading import Lock
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -83,9 +86,14 @@ _DEFAULT_MAX_FAILURES: int = 5
 # How long a locked-out IP must wait before trying again (seconds).
 _DEFAULT_LOCKOUT_SECONDS: int = 900  # 15 minutes
 
+# How long a sub-lockout record (failures < max_failures, no lockout triggered)
+# is kept in the in-memory store before being evicted.  Prevents unbounded
+# growth under a slow-crawl attack that never reaches the lockout threshold.
+_DEFAULT_FAILURE_WINDOW_SECONDS: int = 3600  # 1 hour
+
 # HTTP status codes emitted by POST /login that we care about.
-_STATUS_FAILURE = 401   # wrong password
-_STATUS_SUCCESS = 303   # redirect to /vault after successful login
+_STATUS_FAILURE: int = 401   # wrong password
+_STATUS_SUCCESS: int = 303   # redirect to /vault after successful login
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +106,10 @@ class _AttemptRecord:
     """Per-IP state stored in the tracker."""
 
     failures: int = 0
-    # epoch time (via time.monotonic()) when the lockout ends; 0 = not locked.
+    # monotonic clock value (time.monotonic()) when the lockout ends; 0.0 = not locked.
     locked_until: float = 0.0
+    # monotonic clock value of the most recent failed attempt; 0.0 = no attempts yet.
+    last_failure_at: float = 0.0
 
 
 class _LoginAttemptTracker:
@@ -114,9 +124,11 @@ class _LoginAttemptTracker:
         self,
         max_failures: int = _DEFAULT_MAX_FAILURES,
         lockout_seconds: int = _DEFAULT_LOCKOUT_SECONDS,
+        failure_window_seconds: int = _DEFAULT_FAILURE_WINDOW_SECONDS,
     ) -> None:
         self._max_failures = max_failures
         self._lockout_seconds = lockout_seconds
+        self._failure_window_seconds = failure_window_seconds
         self._records: dict[str, _AttemptRecord] = {}
         self._lock = Lock()
 
@@ -142,6 +154,16 @@ class _LoginAttemptTracker:
             # Lockout has expired — clean up so the next failure starts fresh.
             if record.locked_until > 0:
                 del self._records[ip]
+                return False, 0
+
+            # No active lockout — evict sub-lockout records whose failure window
+            # has elapsed.  Prevents unbounded memory growth from IPs that fail
+            # fewer than max_failures times and never trigger a lockout.
+            if (
+                record.last_failure_at > 0
+                and (now - record.last_failure_at) >= self._failure_window_seconds
+            ):
+                del self._records[ip]
             return False, 0
 
     def record_failure(self, ip: str) -> int:
@@ -155,6 +177,7 @@ class _LoginAttemptTracker:
                 self._records[ip] = _AttemptRecord()
             record = self._records[ip]
             record.failures += 1
+            record.last_failure_at = time.monotonic()
 
             if record.failures >= self._max_failures:
                 record.locked_until = time.monotonic() + self._lockout_seconds
@@ -218,7 +241,7 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
         app,
         max_failures: int = _DEFAULT_MAX_FAILURES,
         lockout_seconds: int = _DEFAULT_LOCKOUT_SECONDS,
-        _tracker_override: "_LoginAttemptTracker | None" = None,
+        _tracker_override: _LoginAttemptTracker | None = None,
     ) -> None:
         super().__init__(app)
         # Accept an externally-created tracker so callers (e.g. main.py) can
@@ -229,7 +252,9 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
             lockout_seconds=lockout_seconds,
         )
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         """Pass non-login requests straight through; enforce lockout on POST /login."""
         # Only intercept POST /login — every other route is unaffected.
         if request.method != "POST" or request.url.path != "/login":
@@ -248,6 +273,7 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
             return HTMLResponse(
                 content=_lockout_page(remaining),
                 status_code=429,
+                headers={"Retry-After": str(remaining)},
             )
 
         # ── Forward the request ─────────────────────────────────────────────

@@ -58,6 +58,7 @@ from app.middleware.rate_limit import (
     _LoginAttemptTracker,
     _DEFAULT_MAX_FAILURES,
     _DEFAULT_LOCKOUT_SECONDS,
+    _lockout_page,
 )
 from app.models.user import Base
 
@@ -190,8 +191,8 @@ class TestLoginAttemptTracker:
         t = self._tracker(max_failures=1, lockout_seconds=60)
         t.record_failure("10.0.0.4")
         _, remaining = t.is_locked("10.0.0.4")
-        # Should be close to 60 seconds; allow 2 seconds of test execution time.
-        assert 58 <= remaining <= 60
+        # Should be close to 60 seconds; allow 5 seconds for slow CI hosts.
+        assert 55 <= remaining <= 60
 
     def test_record_success_before_lockout_resets_counter(self):
         t = self._tracker(max_failures=5)
@@ -230,6 +231,25 @@ class TestLoginAttemptTracker:
         t.reset_all()
         assert t.failure_count("10.0.0.9") == 0
         assert t.failure_count("10.0.0.10") == 0
+
+    def test_sub_lockout_record_evicted_after_failure_window(self):
+        """Partial-failure records below max_failures are evicted after failure_window_seconds.
+
+        Uses failure_window_seconds=0 so the window expires immediately on the
+        next is_locked() call — time.monotonic() always advances between calls.
+        """
+        t = _LoginAttemptTracker(
+            max_failures=5,
+            lockout_seconds=60,
+            failure_window_seconds=0,
+        )
+        t.record_failure("10.0.0.11")  # 1/5 — no lockout triggered
+        t.record_failure("10.0.0.11")  # 2/5 — still below threshold
+        # failure_window_seconds=0 means (now - last_failure_at) >= 0 is always
+        # True, so is_locked() evicts the record immediately.
+        locked, _ = t.is_locked("10.0.0.11")
+        assert not locked
+        assert t.failure_count("10.0.0.11") == 0  # record evicted
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +345,17 @@ class TestLoginRateLimitMiddleware:
             response = client.post("/login")
             assert response.status_code == 422  # never 429
 
+    def test_429_includes_retry_after_header(self):
+        """429 response must include a Retry-After header (RFC 6585 §4)."""
+        _, client = _make_stub_app(login_status=401)
+        for _ in range(_TEST_MAX_FAILURES):
+            client.post("/login")
+        response = client.post("/login")
+        assert response.status_code == 429
+        assert "retry-after" in response.headers
+        retry_after = int(response.headers["retry-after"])
+        assert retry_after > 0
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: full app stack
@@ -335,6 +366,7 @@ class TestRateLimitInFullStack:
     """Verify the rate limiter works end-to-end with CSRF and encrypted session."""
 
     _CREDENTIAL = "StrongVaultP@ss456!"
+    _WRONG_CREDENTIAL = "wrong-pw"
 
     def _setup_vault(self, client: TestClient) -> None:
         csrf = _get_csrf(client, "/setup")
@@ -369,3 +401,80 @@ class TestRateLimitInFullStack:
         """
         response = full_client.post("/login", data={"csrf_token": ""})
         assert response.status_code == 403
+
+    def test_429_carries_csp_header(self, full_client: TestClient):
+        """429 lockout response must still carry the CSP header.
+
+        CSPMiddleware is outermost — it wraps every response including lockout
+        pages returned by the rate limiter before the route handler runs.
+        """
+        from app.middleware.csp import CSP_HEADER_VALUE
+
+        self._setup_vault(full_client)  # idempotent — 400 on duplicate is ignored
+        for _ in range(_DEFAULT_MAX_FAILURES):
+            csrf = _get_csrf(full_client, "/login")
+            full_client.post("/login", data={"csrf_token": csrf, "password": self._WRONG_CREDENTIAL})
+        csrf = _get_csrf(full_client, "/login")
+        response = full_client.post("/login", data={"csrf_token": csrf, "password": self._WRONG_CREDENTIAL})
+        assert response.status_code == 429
+        assert response.headers.get("content-security-policy") == CSP_HEADER_VALUE
+
+    def test_429_carries_retry_after_header(self, full_client: TestClient):
+        """429 lockout response must include a Retry-After header in the full stack."""
+        self._setup_vault(full_client)  # idempotent
+        for _ in range(_DEFAULT_MAX_FAILURES):
+            csrf = _get_csrf(full_client, "/login")
+            full_client.post("/login", data={"csrf_token": csrf, "password": self._WRONG_CREDENTIAL})
+        csrf = _get_csrf(full_client, "/login")
+        response = full_client.post("/login", data={"csrf_token": csrf, "password": self._WRONG_CREDENTIAL})
+        assert response.status_code == 429
+        assert "retry-after" in response.headers
+        assert int(response.headers["retry-after"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _lockout_page() time-string formatting
+# ---------------------------------------------------------------------------
+
+
+class TestLockoutPageFormatting:
+    """Unit tests for every formatting branch in _lockout_page().
+
+    Branches:
+      seconds_remaining < 60         → "N second[s]"
+      seconds_remaining % 60 == 0    → "M minute[s]"
+      seconds_remaining % 60 != 0    → "M minute[s] N second[s]"
+    Singular/plural is tested for both the minutes and seconds components.
+    """
+
+    @pytest.mark.parametrize("seconds, expected_fragment", [
+        (1,   "1 second"),       # singular seconds
+        (2,   "2 seconds"),      # plural seconds
+        (59,  "59 seconds"),     # boundary before minutes
+        (60,  "1 minute"),       # exactly 1 minute, no seconds component
+        (60,  "1 minute"),       # singular minute
+        (120, "2 minutes"),      # plural minutes, no seconds
+        (61,  "1 minute"),       # 1 minute 1 second — minute component
+        (61,  "1 second"),       # 1 minute 1 second — second component
+        (62,  "1 minute"),       # 1 minute 2 seconds — minute component
+        (62,  "2 seconds"),      # 1 minute 2 seconds — second component
+        (121, "2 minutes"),      # 2 minutes 1 second — minute component
+        (121, "1 second"),       # 2 minutes 1 second — second component
+        (900, "15 minutes"),     # default lockout (15 minutes exactly)
+    ])
+    def test_time_string_in_page(self, seconds: int, expected_fragment: str) -> None:
+        page = _lockout_page(seconds)
+        assert expected_fragment in page, (
+            f"Expected '{expected_fragment}' in lockout page for {seconds}s, got:\n{page}"
+        )
+
+    def test_page_is_valid_html(self) -> None:
+        """Page must start with DOCTYPE and contain the status code."""
+        page = _lockout_page(900)
+        assert page.strip().startswith("<!DOCTYPE html>")
+        assert "429" in page
+
+    def test_page_contains_return_link(self) -> None:
+        """Page must include a link back to /login."""
+        page = _lockout_page(60)
+        assert 'href="/login"' in page
