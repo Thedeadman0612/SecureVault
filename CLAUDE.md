@@ -223,7 +223,7 @@ except ValueError:
 
 ---
 
-### Phase 2 — Security Hardening — Status: 🟡 In Progress
+### Phase 2 — Security Hardening — Status: ✅ Complete
 
 #### ✅ Completed
 
@@ -257,12 +257,14 @@ except ValueError:
 | `app/middleware/encrypted_session.py` | New — replaces `SessionMiddleware`; Fernet (AES-128-CBC + HMAC-SHA256) encrypts the full cookie payload so the session is opaque; `_derive_fernet_key()` uses HKDF-SHA256 on `SECRET_KEY` (no new env variable); `ttl=max_age` enforces session expiry at the crypto layer; tampered/expired cookies log a warning and return `{}`; logout triggers `Max-Age=0` delete-cookie; raw ASGI `__call__` pattern (same as Starlette's own `SessionMiddleware`) |
 | `app/main.py` | Removed `SessionMiddleware` import; added `EncryptedSessionMiddleware` with identical parameters and stack position; module docstring updated to reflect four-layer middleware stack with encrypted sessions |
 | `app/tests/test_encrypted_session.py` | New — 20 tests: `TestCookieIsOpaque` (Phase 1 base64-decode attack fails; Fernet decrypt succeeds with correct key; wrong key raises `InvalidToken`), `TestSessionRoundTrip` (write→read, empty before write, persists across requests, cookie refreshed each response), `TestTamperedCookie` (empty session, `Max-Age=0` delete header, fresh session after clear), `TestLogoutDeletesCookie` (`Max-Age=0` on `session.clear()`, empty after clear, no spurious header when session never existed), `TestKeyDerivation` (deterministic, different secrets differ, valid Fernet key, 44-char base64url), plus integration test confirming vault cookie is opaque end-to-end |
+| `app/middleware/rate_limit.py` | New — `_LoginAttemptTracker` (thread-safe in-memory per-IP failure counter with `threading.Lock`; `is_locked()`, `record_failure()`, `record_success()`, `failure_count()`, `reset_all()` API); `LoginRateLimitMiddleware` (intercepts POST /login only; pre-flight 429 if IP locked; records failure on 401, resets on 303, ignores 422/500; default 5 failures → 15-minute lockout); `_lockout_page()` inline HTML helper; middleware positioned INSIDE CSRFMiddleware so bot requests without CSRF tokens never inflate the counter; module docstring documents all design decisions including in-memory rationale and reverse-proxy caveat |
+| `app/main.py` | `LoginRateLimitMiddleware` imported and wired between `AuthGuard` (inner) and `CSRFMiddleware` (outer); tracker created explicitly as `_login_tracker` and stored on `app.state.login_tracker` so test fixtures can call `reset_all()` without reaching into middleware internals; middleware order docstring updated to document the five-layer stack |
+| `app/tests/conftest.py` | New — `login_tracker_reset` autouse fixture calls `app.state.login_tracker.reset_all()` before every test; prevents cross-test contamination where accumulated wrong-password failures in shared TestClient would lock out the loopback IP and cause unrelated login tests to receive 429 instead of 303/401 |
+| `app/tests/test_rate_limit.py` | New — 20 tests across three classes: `TestLoginAttemptTracker` (10 unit tests — initial state, accumulation, lockout trigger, remaining-seconds accuracy, success reset, expired lockout, IP isolation, reset_all); `TestLoginRateLimitMiddleware` (7 integration tests via stub FastAPI app — N-1 failures not blocked, Nth triggers lockout, 429 body content, /setup not rate-limited, GET not rate-limited, success resets counter, 422 ignored); `TestRateLimitInFullStack` (3 tests — first wrong credential returns 401, GET /login always 200, missing CSRF returns 403 not 429) |
 
 #### ❌ Still To Implement
 
-| File / Area | What's needed |
-|---|---|
-| `app/middleware/rate_limit.py` | Login rate limiting + lockout (`slowapi` with `InMemoryLimiter` — no Redis dependency; or manual SQLite-backed attempt counter) |
+_None — all Phase 2 files are implemented and hardened._ 🎉
 
 > ⚠️ **Re-encryption cannot run in Alembic** — the encryption key only exists in session memory after login and must never touch disk. Alembic adds the `encryption_version` column only. The actual re-encryption is a lazy per-entry operation in `vault_service` at first read after upgrade. All read/write paths must check `encryption_version` and call the correct algorithm.
 

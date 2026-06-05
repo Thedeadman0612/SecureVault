@@ -6,29 +6,29 @@ global error handlers.
 
 MIDDLEWARE ORDER (outermost → innermost, i.e. request processing order):
   1. CSPMiddleware               — stamps Content-Security-Policy on every response.
-                                    Outermost so it covers error pages from inner layers.
-  2. EncryptedSessionMiddleware  — decrypts the session cookie (Fernet AES) into
-                                    scope["session"] = request.session.  Replaced the
-                                    Phase 1 signed-only SessionMiddleware in Phase 2.
-  3. CSRFMiddleware              — generates/validates the CSRF token stored in session;
-                                    exposes it via request.state.csrf_token for templates.
-  4. AuthGuard                   — inspects request.session["encryption_key"]; redirects
+                                    Outermost so it covers error pages from all inner layers.
+  2. EncryptedSessionMiddleware  — decrypts the Fernet-encrypted session cookie into
+                                    scope["session"] = request.session.
+  3. CSRFMiddleware              — validates the CSRF token stored in the session;
+                                    exposes request.state.csrf_token for templates.
+  4. LoginRateLimitMiddleware    — enforces a failed-attempt lockout on POST /login.
+                                    Sits INSIDE CSRFMiddleware so only CSRF-validated
+                                    requests count as genuine password attempts.
+  5. AuthGuard                   — checks request.session["encryption_key"]; redirects
                                     unauthenticated requests to /login.
 
   In FastAPI/Starlette, add_middleware() stacks in reverse — the LAST call
   produces the OUTERMOST layer.  Add order:
 
     app.add_middleware(AuthGuard)                          # added first  → innermost
-    app.add_middleware(CSRFMiddleware)                     # added second → middle-inner
-    app.add_middleware(EncryptedSessionMiddleware, ...)    # added third  → middle-outer
+    app.add_middleware(LoginRateLimitMiddleware)           # added second → inside CSRF
+    app.add_middleware(CSRFMiddleware)                     # added third  → outside LRL
+    app.add_middleware(EncryptedSessionMiddleware, ...)    # added fourth → middle-outer
     app.add_middleware(CSPMiddleware)                      # added last   → outermost
 
-  EncryptedSessionMiddleware sits outside CSRFMiddleware because CSRFMiddleware
-  reads/writes request.session (the decrypted dict) — the session must be
-  populated before CSRF inspection runs.
-
-  CSPMiddleware is outermost because it adds a response header that must appear
-  on ALL responses, including CSRF 403s and session-layer error responses.
+  LoginRateLimitMiddleware inside CSRFMiddleware ensures bots without valid
+  CSRF tokens get a 403 and never inflate the failure counter.  429 lockout
+  responses still receive the CSP header (CSPMiddleware wraps everything).
 
 GLOBAL ERROR HANDLERS:
   404 Not Found         — generic HTML page; no internal path or DB detail.
@@ -53,6 +53,7 @@ from app.middleware.auth_guard import AuthGuard
 from app.middleware.csrf import CSRFMiddleware
 from app.middleware.csp import CSPMiddleware
 from app.middleware.encrypted_session import EncryptedSessionMiddleware
+from app.middleware.rate_limit import LoginRateLimitMiddleware, _LoginAttemptTracker
 from app.routes import auth, vault
 
 logger = logging.getLogger(__name__)
@@ -83,11 +84,23 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # (Last added = outermost = runs first on incoming requests.)
 # ---------------------------------------------------------------------------
 
-# AuthGuard — innermost; reads the session set up by SessionMiddleware.
+# AuthGuard — innermost; reads the session populated by EncryptedSessionMiddleware.
 app.add_middleware(AuthGuard)
 
-# CSRFMiddleware — middle; needs session (set by outer SessionMiddleware);
-# sits outside AuthGuard so that /login and /setup are also CSRF-protected.
+# LoginRateLimitMiddleware — inside CSRFMiddleware so only CSRF-validated
+# requests (i.e. genuine password attempts) count toward the failure limit.
+# Returns 429 when the IP is locked; records failure on 401, resets on 303.
+#
+# The tracker is created explicitly and stored on app.state so test fixtures
+# can call app.state.login_tracker.reset_all() to prevent cross-test
+# contamination (multiple wrong-password tests would otherwise exhaust the
+# limit and lock out the shared test IP).
+_login_tracker = _LoginAttemptTracker()
+app.state.login_tracker = _login_tracker
+app.add_middleware(LoginRateLimitMiddleware, _tracker_override=_login_tracker)
+
+# CSRFMiddleware — outside LoginRateLimitMiddleware; bots without a valid
+# CSRF token are blocked here (403) before the rate limiter ever sees them.
 app.add_middleware(CSRFMiddleware)
 
 # EncryptedSessionMiddleware — middle-outer; ENCRYPTS (not just signs) the
