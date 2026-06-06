@@ -430,8 +430,15 @@ class TestCSRFProtection:
     """CSRFMiddleware rejects POST requests with a missing or wrong token."""
 
     def test_post_without_csrf_token_returns_403(self, client):
-        """Any POST with no csrf_token field must be rejected before the route
-        handler is invoked — the middleware returns 403 immediately."""
+        """A POST with no csrf_token field on an ACTIVE session must be rejected
+        with 403 — the middleware blocks the request before the route handler.
+
+        The prior GET establishes a CSRF token in the session (token_was_fresh=False),
+        which is the "genuine missing-token" scenario.  Compare with
+        test_stale_csrf_token_on_fresh_session_redirects_to_login below, which
+        covers the session-expiry race (token_was_fresh=True → 303 redirect).
+        """
+        _get_csrf_token(client, "/login")   # establish token in session
         response = client.post("/login", data={"password": _VALID_CREDENTIAL})
         assert response.status_code == 403
 
@@ -472,3 +479,30 @@ class TestCSRFProtection:
         token_first  = _get_csrf_token(client, "/login")
         token_second = _get_csrf_token(client, "/login")
         assert token_first == token_second
+
+    def test_stale_csrf_token_on_fresh_session_redirects_to_login(self):
+        """A POST that arrives on a fresh/expired session redirects to /login.
+
+        Scenario: the session expired (or a background browser request such as
+        Chrome's DevTools probe silently triggered a session replacement).  The
+        user's page is still open with the old CSRF token baked in.  Submitting
+        any form now produces a token mismatch on an otherwise-empty session.
+
+        Expected behaviour: 303 redirect to /login (not a confusing 403),
+        because this is a stale-page race, not a genuine attack.
+
+        A genuine CSRF attack arrives while the session is ACTIVE
+        (token_was_fresh=False) and still receives 403 — see
+        test_post_with_wrong_csrf_token_returns_403 above.
+        """
+        # Use a brand-new, isolated TestClient so there is no session state
+        # whatsoever — the very first request is the POST.
+        fresh_client = TestClient(app, raise_server_exceptions=False)
+        response = fresh_client.post(
+            "/login",
+            data={"csrf_token": "a" * 64},   # non-empty but wrong
+            follow_redirects=False,
+        )
+        # The middleware must redirect, not forbid.
+        assert response.status_code == 303
+        assert response.headers.get("location") in ("/login", "http://testserver/login")

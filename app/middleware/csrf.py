@@ -30,6 +30,23 @@ in tab A is invalidated the moment tab B loads a new page.  A session-scoped
 token (cleared on logout via ``session.clear()``) provides the right balance
 between security and usability for a single-user local app.
 
+SESSION EXPIRY AND CSRF FAILURES
+---------------------------------
+When the encrypted session cookie expires, EncryptedSessionMiddleware replaces
+it with a fresh empty session (no ``csrf_token``).  If a background request
+(e.g. Chrome's automatic DevTools endpoint probing) triggers this replacement
+while a page is open, the next form submission carries the old CSRF token —
+which no longer matches the freshly-generated one in the new session.
+
+This is NOT an attack; it is a stale-page-meets-expired-session race.  The
+middleware detects it via ``token_was_fresh`` (True when the session had no
+CSRF token when the mutating request arrived) and responds with a 303 redirect
+to ``/login`` instead of a 403.  The user is prompted to log in again, which
+is the correct UX for an expired session.
+
+A genuine CSRF attack always arrives while an authenticated session is active
+(``token_was_fresh=False``), so it still receives the 403 response.
+
 MIDDLEWARE POSITION IN STACK (main.py add_middleware call order)
 ----------------------------------------------------------------
   app.add_middleware(AuthGuard)       # innermost  — runs last on the way in
@@ -47,7 +64,7 @@ from collections.abc import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, Response
+from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +95,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         # ------------------------------------------------------------------
         # Step 1 — Ensure a session token exists.
         # ------------------------------------------------------------------
+        # Record whether the session already had a token BEFORE we potentially
+        # generate a fresh one.  This flag is used below to distinguish a
+        # genuine CSRF attack (session had a token, submitted value was wrong)
+        # from a session-expiry mismatch (session was fresh/expired, so the
+        # token embedded in the still-open page no longer matches).
         token: str = request.session.get(CSRF_FIELD, "")
+        token_was_fresh: bool = not token   # True when session had no token
+
         if not token:
             token = secrets.token_hex(_TOKEN_BYTES)
             request.session[CSRF_FIELD] = token
@@ -106,6 +130,32 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                 submitted = ""
 
             if not submitted or not secrets.compare_digest(token, submitted):
+                # ----------------------------------------------------------
+                # Distinguish session expiry from a genuine CSRF attack.
+                #
+                # SESSION EXPIRY path (token_was_fresh=True):
+                #   The session had no CSRF token when this request arrived —
+                #   the EncryptedSessionMiddleware replaced an expired cookie
+                #   with a fresh empty session.  The form still carries the
+                #   token from the old session (e.g. Chrome made a background
+                #   DevTools request that silently triggered a session refresh,
+                #   or the user left a tab open past the session timeout).
+                #   The mismatch is not an attack; redirect to /login so the
+                #   user can start a fresh session cleanly.
+                #
+                # GENUINE CSRF ATTACK path (token_was_fresh=False):
+                #   The session had a valid token but the submitted value
+                #   was absent or wrong.  Return 403 to block the request.
+                # ----------------------------------------------------------
+                if token_was_fresh:
+                    logger.info(
+                        "CSRF token mismatch on fresh/expired session — "
+                        "method=%s path=%s — redirecting to /login",
+                        request.method,
+                        request.url.path,
+                    )
+                    return RedirectResponse(url="/login", status_code=303)
+
                 logger.warning(
                     "CSRF validation failed — method=%s path=%s "
                     "(token present: %s)",
