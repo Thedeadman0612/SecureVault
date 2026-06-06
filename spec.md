@@ -88,34 +88,38 @@ Avoid:
 | Session Handling | Starlette `SessionMiddleware` + `itsdangerous` |
 | Testing | pytest |
 | Package Manager | pip / uv |
-| Deployment (later) | Docker |
-| AI Integration (Phase 6) | `anthropic` Python SDK (Claude API) |
-| Breach Detection (Phase 6) | HaveIBeenPwned REST API |
-| Mobile — PWA (Phase 8) | `manifest.json` + Service Worker |
-| Mobile — API Auth (Phase 9) | `PyJWT` (JWT — preferred over `python-jose` which has had CVEs and is less actively maintained) |
-| Mobile — Android client (Phase 9) | Flutter (Dart) |
+| Deployment (Phase 6) | Docker + AWS EC2 (t3.micro) + nginx + certbot (Let's Encrypt) |
+| 2FA (Phase 3) | `pyotp` (TOTP RFC 6238) + `qrcode[pil]` (QR code generation) |
+| AI Integration (Phase 7) | `anthropic` Python SDK (Claude API) |
+| Breach Detection (Phase 7) | HaveIBeenPwned REST API |
+| Mobile — PWA (Phase 9) | `manifest.json` + Service Worker |
+| Extension — API Auth (Phase 10) | `PyJWT` (JWT — preferred over `python-jose` which has had CVEs and is less actively maintained) |
+| Browser Extension (Phase 10) | Chrome/Firefox extension (Manifest V3, vanilla JS) |
 
 ---
 
 ## High-Level System Architecture
 
 ```
-Browser (HTML)          Android App (Phase 9)
+Browser (HTML)      Browser Extension (Phase 10)
      ↓                          ↓
      ↓              /api/v1/ (JSON + JWT)
      ↓                          ↓
      └──────────────────────────┘
                   ↓
+      nginx (reverse proxy, TLS)   ← Phase 6
+                  ↓
      FastAPI Web Application
                   ↓
      Authentication Layer
        (Session cookie  /  JWT Bearer)
+       + TOTP 2FA step-up (Phase 3)
                   ↓
      Encryption Service
                   ↓
      Database Access Layer
                   ↓
-       SQLite Database
+       SQLite Database (EBS volume on EC2)
 ```
 
 ---
@@ -177,11 +181,13 @@ Setup process:
 User must:
 - enter master password
 - authenticate successfully before vault access
+- complete TOTP verification if 2FA is enabled (Phase 3)
 
 System behavior:
 - verify Argon2 hash
-- create authenticated session
-- deny access on invalid password
+- if 2FA is enabled: store `pending_user_id` in session and redirect to `/2fa/verify`; only after TOTP verification create the full authenticated session with `encryption_key`
+- if 2FA is disabled: create authenticated session immediately after password check
+- deny access on invalid password or invalid TOTP code
 
 #### Session Management
 
@@ -342,7 +348,7 @@ Fields:
 Validation:
 - minimum length (12+ characters recommended)
 - password match
-- strength indicator (Phase 3)
+- strength indicator (Phase 4)
 
 #### Login Page
 
@@ -374,7 +380,7 @@ Fields:
 
 Features:
 - form validation
-- password visibility toggle (Phase 3)
+- password visibility toggle (Phase 4)
 
 #### Entry Details Page
 
@@ -394,8 +400,13 @@ Features:
 | `GET` | `/setup` | Setup page (only if no user exists) |
 | `POST` | `/setup` | Submit master password setup |
 | `GET` | `/login` | Login page |
-| `POST` | `/login` | Authenticate and create session |
+| `POST` | `/login` | Authenticate and create session (redirects to `/2fa/verify` if 2FA enabled) |
 | `POST` | `/logout` | Invalidate session |
+| `GET` | `/2fa/setup` | Show QR code and setup instructions *(Phase 3)* |
+| `POST` | `/2fa/setup` | Confirm first TOTP code; activate 2FA; return recovery codes *(Phase 3)* |
+| `GET` | `/2fa/verify` | TOTP prompt shown mid-login after password step *(Phase 3)* |
+| `POST` | `/2fa/verify` | Validate TOTP code; complete session if correct *(Phase 3)* |
+| `POST` | `/2fa/disable` | Disable 2FA (requires current TOTP code confirmation) *(Phase 3)* |
 
 ### Vault Routes
 
@@ -551,20 +562,60 @@ Requirements:
 - Both algorithms decrypt their own ciphertext correctly; cross-decryption fails with `InvalidToken`
 - CSP header is present on vault and entry routes; value includes `default-src 'self'`
 
-### Phase 3 — UX Improvements
+### Phase 3 — TOTP Two-Factor Authentication
 
-**Goal:** Improve usability.
+**Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
+
+TOTP (RFC 6238) is the industry-standard second factor — supported by Google Authenticator, Authy, Bitwarden, 1Password, and every major identity provider. For a password manager specifically, 2FA is particularly impactful: the vault holds credentials for every other service, making it a high-value target.
+
+2FA is opt-in per user: users who skip setup continue to use password-only login.
 
 Requirements:
-- title/website text search and category filtering as query params on `GET /vault` (e.g. `?q=github&category=Work`) — no separate search route; `GET /vault/search` is reserved for Phase 6's AI-powered search
+- Add `totp_secret` (nullable, AES-GCM encrypted at rest) and `totp_enabled` (boolean, default False) to the `User` model
+- Add `RecoveryCode` model — 8 one-time-use recovery codes per user, stored as Argon2id hashes
+- Add `app/security/totp.py` — TOTP secret generation, provisioning URI for QR codes, TOTP verification, recovery code generation and hashing
+- 2FA setup flow: generate secret → show QR code → user scans with authenticator app → confirm first code → activate 2FA → display recovery codes (shown once)
+- Mid-login step-up: after password verification, if `totp_enabled`, store `pending_user_id` in session and redirect to `/2fa/verify`; the vault is not accessible until TOTP is confirmed
+- `AuthGuard` must grant vault access only when `encryption_key` is in session — `pending_user_id` alone is not sufficient
+
+> **Security note:** The TOTP secret must be encrypted at rest using `encrypt_field_gcm()` — treat it identically to vault credentials. Never log the plaintext secret.
+
+**Deliverable:** Optional TOTP 2FA with QR code setup, recovery codes, and a mid-login verification step.
+
+**Success Criteria:**
+- [ ] User can enable 2FA; scanning the QR code with Google Authenticator produces valid codes
+- [ ] Login with 2FA enabled requires both the correct password and a valid TOTP code
+- [ ] A valid recovery code can be used in place of TOTP (and is then marked used/invalid)
+- [ ] Each recovery code is usable exactly once; subsequent attempts with the same code are rejected
+- [ ] `/vault` is inaccessible after the password step until TOTP is confirmed
+- [ ] Disabling 2FA requires a valid TOTP confirmation
+- [ ] `totp_secret` in the database is encrypted ciphertext, not the raw base32 secret
+
+**Test Focus:**
+- TOTP verification: valid code passes, expired code (outside `valid_window`) fails, wrong code fails
+- Recovery code: hash round-trip, one-time use enforcement, invalid code rejected
+- Mid-login session state: `pending_user_id` set after password, cleared after TOTP, vault inaccessible in between
+- 2FA setup confirms the first code before activating — bad confirmation code does not activate 2FA
+- `totp_secret` column stores ciphertext; decrypts to a valid base32 string
+
+---
+
+### Phase 4 — UX Improvements
+
+**Goal:** Improve usability and add practical data management features.
+
+Requirements:
+- title/website text search and category filtering as query params on `GET /vault` (e.g. `?q=github&category=Work`) — no separate search route; `GET /vault/ai-search` is reserved for Phase 7's AI-powered search
 - password generator
 - dark mode
 - responsive layout improvements
 - password visibility toggle
 - copy-to-clipboard with auto-clear
 - password strength indicator on setup/entry
+- password import (`POST /vault/import`) — parse KeePass XML or LastPass CSV; re-encrypt all fields with the current key before writing; show an import preview before committing
+- password export (`GET /vault/export`) — decrypt all entries and write to KeePass XML or LastPass CSV; display a prominent warning that the exported file contains plaintext passwords
 
-**Deliverable:** User-friendly vault UI.
+**Deliverable:** User-friendly vault UI with import/export capability.
 
 **Success Criteria:**
 - [ ] `GET /vault?q=github` returns entries whose title or website contains "github"
@@ -573,26 +624,32 @@ Requirements:
 - [ ] Password generator produces a configurable-length, random password
 - [ ] Copied passwords are cleared from the clipboard after the configured timeout
 - [ ] Dark mode toggle persists across page navigations
+- [ ] A KeePass XML export round-trips cleanly through import with all fields intact
+- [ ] Imported entries are stored encrypted; no plaintext appears in `securevault.db`
 
 **Test Focus:**
 - Search filtering logic on `GET /vault?q=` (title match, website match, no results case)
 - Category filter works independently and combined with `?q=`
 - Password generator meets length and character-set requirements
 - Clipboard auto-clear fires after the configured timeout
+- Import: valid KeePass XML produces correct vault entries; malformed file returns a user-friendly error
+- Export: decrypted field values match what was stored; export route requires authentication
 
-### Phase 4 — Engineering Quality
+---
+
+### Phase 5 — Engineering Quality
 
 **Goal:** Make project portfolio-quality.
 
 Requirements:
-- pytest coverage (unit + integration)
-- linting (ruff or flake8)
-- full type hints
+- pytest coverage (unit + integration) ≥80%
+- linting (Ruff — zero violations)
+- full type hints on all public functions and classes
 - structured logging
-- **security audit logging** — log security-relevant events (login success/failure, vault CRUD, session invalidation) to a dedicated `docs/security_audit_log.md` format or structured log stream; must never include passwords, keys, or decrypted values
+- **security audit logging** — log security-relevant events (login success/failure, 2FA events, vault CRUD, session invalidation) to a dedicated structured log stream; must never include passwords, keys, or decrypted values
 - README with screenshots
-- architecture documentation (`docs/architecture.md` — component diagram, request lifecycle, crypto design)
-- threat model document (`docs/threat_model.md` — assets, threats, mitigations, known limitations)
+- architecture documentation (`docs/architecture.md` — component diagram, request lifecycle, crypto design, 2FA mid-login session design)
+- threat model document (`docs/threat_model.md` — assets, threats, mitigations, known limitations including server-side decryption and Python memory zeroing)
 
 **Deliverable:** Professional-grade project repository.
 
@@ -600,27 +657,38 @@ Requirements:
 - [ ] `pytest` passes with ≥80% code coverage
 - [ ] `ruff check app/` reports zero violations
 - [ ] All public functions and modules carry full type hints
-- [ ] Structured logs capture auth events without leaking any sensitive values
+- [ ] Structured logs capture auth and 2FA events without leaking any sensitive values
 - [ ] README is complete with setup instructions and architecture diagram
 
 **Test Focus:**
 - Full regression suite passes cleanly with no skipped tests
 - Log output captured in tests contains no passwords, keys, or session tokens
-- Security audit log entries are emitted for login success, login failure, and vault delete operations
+- Security audit log entries are emitted for login success, login failure, 2FA success/failure, and vault delete operations
 
-### Phase 5 — DevSecOps
+---
 
-**Goal:** Learn deployment and DevSecOps concepts.
+### Phase 6 — DevSecOps + Cloud Deployment
+
+**Goal:** Learn deployment, DevSecOps concepts, and real cloud infrastructure on AWS.
 
 Requirements:
-- Dockerfile
-- docker-compose
-- GitHub Actions CI pipeline
-- dependency scanning (e.g., `pip-audit`)
-- secret scanning (e.g., `trufflehog` or GitHub secret scanning)
-- container hardening (non-root user, minimal base image)
+- Dockerfile (multi-stage build; non-root user; `python:3.13-slim` base image)
+- docker-compose (full stack up from cold machine; volume mount for `securevault.db` and `logs/`)
+- GitHub Actions CI pipeline — runs `pytest`, `ruff check`, `pip-audit` on every push; fails on violations
+- dependency scanning (`pip-audit` — zero known critical CVEs required)
+- secret scanning (Trufflehog / GitHub secret scanning — no secrets committed)
+- container hardening (non-root user, read-only filesystem where possible)
+- **Cloud deployment on AWS EC2 t3.micro** (free tier 12 months):
+  - Ubuntu 24.04 LTS; Elastic IP; security group: ports 22/80/443 only
+  - nginx reverse proxy (`proxy_pass http://127.0.0.1:8000`; HTTP→HTTPS redirect)
+  - TLS via certbot / Let's Encrypt (auto-renewal via cron)
+  - systemd service (`Restart=always`; environment variables from `/etc/securevault/env`, not the unit file)
+  - SQLite database on a separate EBS volume — survives instance replacement
+  - GitHub Actions SSH deploy workflow: push → SSH → git pull → systemctl restart
 
-**Deliverable:** Deployable containerized application.
+> **Rate limiter note:** When nginx is in front, `request.client.host` is nginx's loopback IP. Update `LoginRateLimitMiddleware` to read `X-Forwarded-For` when `ENVIRONMENT=production`. Never trust `X-Forwarded-For` in dev.
+
+**Deliverable:** Containerized application running on AWS EC2 with HTTPS, CI/CD pipeline, and dependency scanning.
 
 **Success Criteria:**
 - [ ] `docker build` succeeds and the container starts the app correctly
@@ -628,56 +696,59 @@ Requirements:
 - [ ] GitHub Actions CI runs tests and lint on every push and fails on violations
 - [ ] `pip-audit` reports no known critical vulnerabilities
 - [ ] Container process runs as a non-root user
+- [ ] Application is accessible over HTTPS at a public domain; HTTP redirects to HTTPS
+- [ ] TLS certificate is valid; no browser security warnings
 
 **Test Focus:**
 - Container smoke test: app responds to HTTP requests after `docker-compose up`
 - CI pipeline passes cleanly on a fresh runner with no cached state
+- Rate limiter reads `X-Forwarded-For` in production mode; ignores it in dev mode
 
-### Phase 6 — GenAI Integration
+---
+
+### Phase 7 — GenAI Integration
 
 **Goal:** Add AI-powered security intelligence to the vault while keeping all sensitive data strictly local. The Claude API is used to analyse metadata only — decrypted passwords, usernames, and notes are never sent to any external service.
 
+> **Scope:** 3 features — Password Strength Analyzer, Smart Entry Assistant, Breach Detection. Auto-categorization and natural language search were descoped; their value/effort ratio is too low for a personal vault.
+>
 > **Critical security constraint:** Only plaintext metadata (`title`, `website`, `category`, password complexity metrics, timestamps) may be transmitted to the Claude API. Decrypted passwords, usernames, notes, encryption keys, and session tokens must never leave the local machine.
 
 Requirements:
-- Add `app/schemas/ai_metadata.py` — defines `VaultMetadataForAI` Pydantic model containing **only** safe fields: `title`, `website`, `category`, `password_length`, `has_uppercase`, `has_numbers`, `has_symbols`, `created_at`, `updated_at`. This DTO is the only type accepted by `ai_service` functions — structural enforcement of the metadata-only constraint, not just a naming convention.
-- Add `app/services/ai_service.py` — Anthropic Claude API client; accepts `list[VaultMetadataForAI]` (never raw entry objects); metadata extraction helpers; all AI feature functions; function signatures must never include `password`, `username`, or `notes` parameters
-- Add `app/routes/ai.py` — thin route handlers delegating to `ai_service`; convert `VaultEntry` ORM objects to `VaultMetadataForAI` DTOs before any `ai_service` call
-- Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` to `.env` and `app/config/settings.py`
+- Add `app/schemas/ai_metadata.py` — `VaultMetadataForAI` Pydantic model with **only** safe fields: `title`, `website`, `category`, `password_length`, `has_uppercase`, `has_numbers`, `has_symbols`, `created_at`, `updated_at`. Structural enforcement of the metadata-only constraint.
+- Add `app/services/ai_service.py` — Claude API client; all functions accept `list[VaultMetadataForAI]` (never raw entry objects); metadata extraction helper strips encrypted fields before any API call
+- Add `app/routes/ai.py` — thin route handlers; convert `VaultEntry` → `VaultMetadataForAI` before any `ai_service` call
+- Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` to `.env` and settings
 
 **Features:**
 
 | Feature | Endpoint | Description |
 |---|---|---|
-| 6.1 Password Strength Analyzer | `GET /vault/analyze` | Sends metadata only to Claude; returns prioritised recommendations (potential reuse indicators flagged by same length + complexity metrics — approximation only, actual reuse detection requires comparing passwords which is forbidden; stale passwords ≥6 months; weak by metrics; incomplete entries); dashboard button + modal |
-| 6.2 Security Audit Assistant | `GET /vault/audit` | Full vault security score 0–100; score breakdown (strength, age, reuse, coverage); prioritised action list |
-| 6.3 Smart Entry Assistant | `POST /entry/smart-fill` | User pastes any text; Claude extracts title, website, username, category; pre-fills add-entry form; user reviews before saving |
-| 6.4 Auto-categorization | (inline, new-entry form) | Real-time category suggestion when user types title + website; shown as clickable chip; accepted or ignored |
-| 6.5 Natural Language Vault Search | `GET /vault/ai-search?q=` | Deliberately separate from Phase 3's text search on `GET /vault?q=`; Claude interprets free-text query and maps to entry filters (e.g. "streaming services" → Netflix/Spotify); responses cached in-memory keyed on query string for 5 minutes to avoid duplicate API calls |
-| 6.6 Breach Detection | `GET /vault/breach-check` | Checks website domain names (never passwords) against HaveIBeenPwned API; results stored in a `breach_cache(domain, is_breached, checked_at)` SQLite table — survives server restarts; re-fetched if `checked_at` is older than 24 h; breach badges on dashboard |
+| 7.1 Password Strength Analyzer | `GET /vault/analyze` | Metadata only sent to Claude; returns prioritised recommendations (reuse indicators by length + complexity approximation; stale passwords ≥6 months; weak by metrics; incomplete entries); dashboard button + modal |
+| 7.2 Smart Entry Assistant | `POST /entry/smart-fill` | User pastes any text (email, URL, app description); Claude extracts title, website, username, category; pre-fills add-entry form; user reviews before saving |
+| 7.3 Breach Detection | `GET /vault/breach-check` | Checks website domain names (never passwords) against HaveIBeenPwned API; results cached in `breach_cache` SQLite table for 24 h; breach badges on dashboard |
 
-**Deliverable:** AI-enhanced vault dashboard with local-first security intelligence and zero sensitive-data leakage.
+**Deliverable:** AI-enhanced vault dashboard with metadata-only intelligence and zero sensitive-data leakage.
 
 **Success Criteria:**
 - [ ] `/vault/analyze` returns recommendations without sending any decrypted field to the Claude API (verified by inspecting outbound payloads in tests)
 - [ ] `/entry/smart-fill` pre-fills the form correctly from pasted unstructured text
-- [ ] `/vault/breach-check` returns breach status for vault domains; no credentials are included in the HIBP request
-- [ ] All AI routes return a graceful error message (not a 500) when `ANTHROPIC_API_KEY` is missing or the API is unreachable
+- [ ] `/vault/breach-check` returns breach status for vault domains; no credentials included in HIBP request
+- [ ] All AI routes return a graceful error (not a 500) when `ANTHROPIC_API_KEY` is missing or unreachable
 - [ ] `ai_service.py` contains no function signature that accepts `password`, `username`, or `notes` as a parameter
 
 **Test Focus:**
-- Metadata extraction helper strips encrypted fields — assert output dict contains no `*_encrypted` keys and no raw plaintext credentials
-- Claude API client is called with a payload containing only safe fields (mock the API; assert request body)
-- Natural language search (`GET /vault/ai-search?q=`) maps sample queries to the correct entry filters; 5-minute in-memory cache returns same result without a second API call for identical queries within the window
-- Breach check result is stored in `breach_cache` SQLite table — assert the HIBP API is called only once for repeated requests within 24 h; assert result survives a simulated server restart (read from DB, not memory)
+- Metadata extraction helper strips encrypted fields — output contains no `*_encrypted` keys and no raw plaintext credentials
+- Claude API called with safe-fields-only payload (mock API; assert request body)
+- Breach check result stored in `breach_cache` table; HIBP called only once per domain within 24 h window
 
 ---
 
-### Phase 7 — Multi-User Support
+### Phase 8 — Multi-User Support
 
 **Goal:** Extend the vault to support multiple independent users, each with their own isolated encrypted vault.
 
-> **Database note:** SQLite is retained intentionally — it handles concurrent reads fine and write contention is negligible for a personal vault with a small number of concurrent users. A migration to PostgreSQL is a non-goal for this project; the local-first, portfolio scope does not justify the operational complexity.
+> **Database note:** SQLite is retained intentionally — it handles concurrent reads fine and write contention is negligible for a personal vault with a small number of users. A migration to PostgreSQL is a non-goal; the portfolio scope does not justify the operational complexity. Document this in `docs/architecture.md`.
 
 Requirements:
 - Add `username` and `email` fields to the `User` model
@@ -701,9 +772,13 @@ Requirements:
 - Each user's encrypted data is decryptable only with their own key
 - Registration validation rejects duplicate usernames and weak passwords
 
-### Phase 8 — Mobile PWA
+---
 
-**Goal:** Make SecureVault accessible on Android devices as an installable Progressive Web App, requiring no new backend code.
+### Phase 9 — Mobile PWA
+
+**Goal:** Make SecureVault accessible on mobile devices as an installable Progressive Web App, requiring no new backend code.
+
+> **Note:** Phase 6 (cloud deployment on AWS EC2 with HTTPS) is a prerequisite for mobile access over the public internet. With HTTPS in place, the PWA can be used from any device without a Wi-Fi restriction.
 
 Requirements:
 - Add `app/static/manifest.json` — app name, short name, icons (192×192 and 512×512 PNG), theme colour, `display: standalone`
@@ -714,15 +789,13 @@ Requirements:
 - Mobile-first Tailwind CSS breakpoints; touch-friendly targets ≥44×44 px; responsive table → card layout on small screens
 - Paginate vault entries (10 per page)
 
-**Deliverable:** SecureVault installable via "Add to Home Screen" on Android Chrome; opens in standalone mode without browser chrome.
+**Deliverable:** SecureVault installable via "Add to Home Screen" on Android/iOS Chrome; opens in standalone mode.
 
 **Success Criteria:**
 - [ ] Chrome's "Add to Home Screen" prompt appears when visiting the app on Android
 - [ ] App opens in standalone mode (no browser URL bar)
 - [ ] Static assets load from service worker cache when the server is unreachable
 - [ ] All pages are usable without horizontal scrolling on a 390px-wide screen
-
-**Limitation:** The phone and the server must be on the same Wi-Fi network (local-first constraint). The app is not accessible over the public internet unless the server is exposed via a reverse proxy or VPN.
 
 **Test Focus:**
 - Lighthouse PWA audit passes installability checks
@@ -731,53 +804,52 @@ Requirements:
 
 ---
 
-### Phase 9 — Native Android Client
+### Phase 10 — Browser Extension
 
-**Goal:** Build a native Android app (Flutter recommended) that communicates with SecureVault via a new JSON REST API, using JWT authentication instead of browser session cookies.
+**Goal:** Build a Chrome/Firefox extension that auto-fills credentials and provides quick vault search — far more practical day-to-day than a native mobile app, and directly relevant to what password managers actually ship.
 
-**Prerequisites:** Phase 7 (multi-user) must be complete — a single-user vault has limited value as a networked app. Phase 5 (Docker/deployment) and an HTTPS certificate are also required.
+**Prerequisites:** Phase 6 (HTTPS + public URL) · Phase 8 (username-based auth for the REST API).
 
 **Backend changes required:**
 
 | Area | Change |
 |---|---|
-| `app/routes/api.py` | New router at `/api/v1/` — mirrors all vault CRUD + auth routes, returns JSON instead of HTML |
+| `app/routes/api.py` | New router at `/api/v1/` — mirrors vault CRUD + auth routes, returns JSON |
 | `app/schemas/api.py` | JSON request/response schemas for the REST API layer |
-| `app/security/tokens.py` | JWT access token (short-lived, 15 min) + refresh token (long-lived) generation and verification via `PyJWT` — preferred over `python-jose` which has had CVEs and is less actively maintained |
-| `app/models/revoked_token.py` | `RevokedToken` ORM model — stores revoked refresh token JTIs with expiry; checked only on token refresh, not on every request |
-| `POST /api/v1/login` | Returns `{ access_token, refresh_token }` on success; never sets a cookie |
-| `POST /api/v1/refresh` | Accepts a refresh token, checks it against `revoked_tokens` table, returns a new access token |
-| `POST /api/v1/logout` | Revokes the refresh token — marks its JTI as revoked in the `revoked_tokens` table; access tokens expire naturally after their short TTL (do not blacklist access tokens per-request) |
-| `app/middleware/auth_guard.py` | Extend to accept `Authorization: Bearer <token>` for `/api/v1/*` routes alongside the existing session cookie check for HTML routes |
-| `app/main.py` | CORS configuration — required for browser-based clients (PWA or React SPA served from a different origin); native Flutter HTTP calls do not require CORS headers but including them is harmless and future-proofs the API |
+| `app/security/tokens.py` | JWT access token (15 min TTL) + refresh token (7 days) via `PyJWT` |
+| `app/models/revoked_token.py` | `RevokedToken` ORM model — revoked refresh token JTIs; checked only on token refresh |
+| `POST /api/v1/login` | Returns `{ access_token, refresh_token }`; never sets a cookie |
+| `POST /api/v1/refresh` | Validates refresh token against `revoked_tokens`, returns new access token |
+| `POST /api/v1/logout` | Revokes the refresh token JTI; access tokens expire naturally |
+| `app/middleware/auth_guard.py` | Accept `Authorization: Bearer <token>` on `/api/v1/*` routes |
+| `app/main.py` | CORS configuration for the extension origin |
 
-**Mobile client (new top-level directory `mobile/`):**
+**Extension frontend (`extension/` top-level directory):**
 
 | Component | Detail |
 |---|---|
-| Framework | Flutter (Dart) — cross-platform, single codebase for Android and iOS |
-| HTTP client | `dio` package — handles JWT token refresh transparently |
-| Secure storage | `flutter_secure_storage` — stores the refresh token in Android Keystore |
-| Biometric unlock | `local_auth` — optional Face/Fingerprint unlock to derive the in-memory key |
-| Architecture | Repository pattern: `AuthRepository`, `VaultRepository` → `ChangeNotifier` state → Flutter widgets |
+| `manifest.json` | Manifest V3; permissions: `storage`, `activeTab`, `scripting`; `host_permissions`: server URL |
+| `popup/` | HTML + JS popup — vault search, click-to-fill, first-time login form |
+| `content/autofill.js` | Content script — detect password + username fields; inject fill buttons; never persist credentials in DOM |
+| `background/` | Service worker — token refresh; message bridge between popup and content script |
+| Token storage | `chrome.storage.session` (cleared on browser close) — not `chrome.storage.local` (persists) |
 
-**Deliverable:** Flutter Android app that logs in, lists, creates, views, edits, and deletes vault entries via the JSON API; refresh token stored in Android Keystore.
+**Deliverable:** Chrome/Firefox extension that auto-fills credentials from the vault; JWT tokens stored in `chrome.storage.session`.
 
 **Success Criteria:**
-- [ ] `POST /api/v1/login` returns valid JWT tokens and rejects wrong passwords with 401
-- [ ] All `/api/v1/` routes require a valid Bearer token; requests without one return 401
-- [ ] HTML routes continue to work unchanged (no regression on the web UI)
-- [ ] Flutter app installs and runs on Android API 26+ (Android 8+)
-- [ ] Refresh token is persisted in Android Keystore, not in plain shared preferences
-- [ ] Token refresh happens transparently — the user is not logged out when the access token expires
+- [ ] `POST /api/v1/login` returns valid JWT tokens; wrong password returns 401
+- [ ] All `/api/v1/` routes require a valid Bearer token; missing/expired token returns 401
+- [ ] HTML routes continue to work unchanged — no regression on the web UI
+- [ ] Extension popup lists vault entries and fills username + password into active tab's form fields
+- [ ] Tokens are stored in `chrome.storage.session`, not `chrome.storage.local`
+- [ ] Closing the browser clears the session — user must re-authenticate after a browser restart
 
 **Test Focus:**
-- JWT token generation, verification, and expiry (`PyJWT`)
-- API routes return 401 for missing/expired tokens and 200 for valid ones
-- Logout revokes the refresh token — subsequent refresh attempts with the same token return 401
-- Access tokens continue to work until natural expiry after logout (by design — short TTL mitigates this)
-- HTML routes are unaffected by the new API middleware
-- Flutter widget tests for login flow and vault list
+- JWT generation, verification, and expiry
+- API routes return 401 for missing/expired tokens, 200 for valid ones
+- Logout revokes refresh token; subsequent refresh with same token returns 401
+- HTML routes unaffected by new API middleware
+- Extension content script injects fill buttons only on pages with password inputs
 
 ---
 
@@ -842,29 +914,24 @@ Claude Code should:
 
 ## Non-Goals (Initially Out of Scope)
 
-- browser extension or password autofill
-- cloud sync or remote storage
+- cloud sync or remote storage (cloud *deployment* on AWS EC2 is planned for Phase 6; sync is not)
 - AI features beyond metadata analysis (no sending of decrypted vault data to any external API — ever)
-- multi-user support (planned for Phase 7)
-- mobile application (PWA planned for Phase 8; native Android client planned for Phase 9)
+- multi-user support (planned for Phase 8)
 - OAuth or SSO login
-- biometric authentication (considered for Phase 9 Android client only)
-- zero-knowledge cloud architecture
-- enterprise features
+- zero-knowledge cloud architecture (known limitation — documented in threat model)
+- enterprise features (SSO, SCIM, audit trails beyond personal use)
+- React or other SPA frontend (Jinja2 server-rendered templates throughout all phases)
+- native Android/iOS app via Flutter (replaced by Browser Extension in Phase 10)
 
 ---
 
-## Future Enhancements (Optional)
+## Future Enhancements (Optional — Beyond Phase 10)
 
-- TOTP / 2FA support
-- encrypted backup export/import
-- audit logs
-- desktop packaging (e.g., PyInstaller or Tauri)
-- React frontend migration
-- secure memory handling (zeroize secrets after use)
-- HTTPS via reverse proxy (nginx)
-- cloud sync experiments
-- **browser-side encryption** — long-term direction: derive the vault key client-side using WebCrypto API so the server never sees the raw key (true zero-knowledge); requires a React or HTMX SPA to manage the in-browser key lifecycle; not feasible with server-rendered Jinja2 templates alone
+- desktop packaging (e.g., PyInstaller or Tauri) — self-contained `.app` / `.exe` without running a server
+- React or HTMX frontend migration — prerequisite for browser-side encryption
+- secure memory handling — zeroize secrets after use; Python's GC and immutable strings make this impractical without `ctypes` tricks; document as a known limitation
+- cloud sync across multiple devices — requires conflict resolution; significant complexity
+- **browser-side encryption** — long-term direction: derive the vault key client-side using the WebCrypto API so the server never sees the raw key (true zero-knowledge); requires a React or HTMX SPA and a complete redesign of the auth + encryption pipeline; not feasible with server-rendered Jinja2 templates alone
 
 ---
 
@@ -888,7 +955,8 @@ The application should be designed with awareness of:
 | Threat | Mitigation |
 |---|---|
 | Local DB theft | All sensitive fields encrypted; key is never stored |
-| Brute force login | Rate limiting + Argon2 slow hashing |
+| Brute force login | Rate limiting + Argon2 slow hashing + TOTP 2FA (Phase 3) |
+| Stolen master password | TOTP 2FA (Phase 3) — attacker also needs the authenticator device |
 | Session hijacking | Secure, HttpOnly, SameSite cookies; encrypted session backend (Phase 2) |
 | Accidental log exposure | Strict logging policy; no secrets logged |
 | Shoulder surfing | Password masking; visibility toggle |

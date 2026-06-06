@@ -95,12 +95,12 @@ This app decrypts vault entries on the server and renders plaintext HTML to the 
 | `app/main.py` | FastAPI app init, middleware registration, router inclusion |
 | `app/config/` | Settings via Pydantic `BaseSettings` (secret key, DB URL, session timeout) |
 | `app/routes/` | Thin route handlers — validate input, call services, return responses |
-| `app/routes/ai.py` | Thin route handlers for all GenAI features (Phase 6), delegating to `ai_service` |
-| `app/routes/api.py` | `/api/v1/` JSON REST API endpoints for the native mobile client (Phase 9) |
+| `app/routes/ai.py` | Thin route handlers for all GenAI features (Phase 7), delegating to `ai_service` |
+| `app/routes/api.py` | `/api/v1/` JSON REST API endpoints for the browser extension (Phase 10) |
 | `app/services/` | Business logic: auth service, vault CRUD service |
-| `app/services/ai_service.py` | Anthropic Claude API client; metadata-only AI features; metadata extraction helpers — never accepts raw password/username as a parameter (Phase 6) |
+| `app/services/ai_service.py` | Anthropic Claude API client; metadata-only AI features; metadata extraction helpers — never accepts raw password/username as a parameter (Phase 7) |
 | `app/security/` | Encryption service (Fernet wrap/unwrap), key derivation, password hashing |
-| `app/security/tokens.py` | JWT access + refresh token generation and verification via `PyJWT` (Phase 9) |
+| `app/security/tokens.py` | JWT access + refresh token generation and verification via `PyJWT` (Phase 10) |
 | `app/models/` | SQLAlchemy ORM models (`User`, `VaultEntry`) |
 | `app/schemas/` | Pydantic request/response schemas |
 | `app/database/` | SQLAlchemy engine, session factory, `get_db` dependency |
@@ -133,13 +133,14 @@ Work is phased — do not implement features from a later phase during an earlie
 
 1. **Phase 1 (MVP):** Setup/login flow, Fernet encryption, CRUD vault, plain HTML + Tailwind frontend, Alembic migrations.
 2. **Phase 2 (Security Hardening):** CSRF protection, rate limiting + lockout, AES-256-GCM encryption upgrade, secure cookie hardening, Argon2id key derivation.
-3. **Phase 3 (UX Improvements):** Search and category filtering, password generator, dark mode, responsive layout improvements, password visibility toggle, copy-to-clipboard with auto-clear, password strength indicator.
-4. **Phase 4 (Engineering Quality):** pytest coverage (unit + integration), Ruff linting, full type hints, structured logging, README with screenshots, architecture documentation, threat model document.
-5. **Phase 5 (DevSecOps):** Dockerfile, docker-compose, GitHub Actions CI pipeline, `pip-audit` dependency scanning, trufflehog secret scanning, container hardening (non-root user, minimal base image).
-6. **Phase 6 (GenAI Integration):** AI-powered security intelligence using Claude API — password strength analyzer, security audit assistant, smart entry assistant, auto-categorization, natural language vault search, breach detection via HaveIBeenPwned. **Critical security rule:** only plaintext metadata (`title`, `website`, `category`, complexity metrics, timestamps) is ever sent to an external API — passwords, usernames, and notes are never transmitted.
-7. **Phase 7 (Multi-User Support):** Registration system, username-based login, user isolation hardening, admin dashboard, per-user settings, email verification and password reset.
-8. **Phase 8 (Mobile PWA):** Mobile-first responsive UI overhaul, Progressive Web App (manifest + service worker), installable on Android home screen, pagination, offline static-asset caching.
-9. **Phase 9 (Native Mobile App):** Flutter Android/iOS app consuming `/api/v1/` REST API with JWT auth, biometric authentication (Keystore/Keychain), secure storage, auto-lock on background, push notifications for breach alerts.
+3. **Phase 3 (TOTP 2FA):** Time-based One-Time Password two-factor authentication using `pyotp`; QR code setup flow; recovery codes; 2FA enforce/disable per user; session step-up after password check.
+4. **Phase 4 (UX Improvements):** Search and category filtering, password generator, dark mode, responsive layout improvements, password visibility toggle, copy-to-clipboard with auto-clear, password strength indicator, password import/export (KeePass XML / LastPass CSV).
+5. **Phase 5 (Engineering Quality):** pytest coverage (unit + integration), Ruff linting, full type hints, structured logging, README with screenshots, architecture documentation, threat model document.
+6. **Phase 6 (DevSecOps):** Dockerfile, docker-compose, GitHub Actions CI pipeline, `pip-audit` dependency scanning, trufflehog secret scanning, container hardening (non-root user, minimal base image), cloud deployment on **AWS EC2 t3.micro** (nginx reverse proxy + TLS via certbot + systemd service).
+7. **Phase 7 (GenAI Integration):** AI-powered security intelligence using Claude API — password strength analyzer, smart entry assistant, breach detection via HaveIBeenPwned. **Critical security rule:** only plaintext metadata (`title`, `website`, `category`, complexity metrics, timestamps) is ever sent to an external API — passwords, usernames, and notes are never transmitted.
+8. **Phase 8 (Multi-User Support):** Registration system, username-based login, user isolation hardening, admin dashboard, per-user settings, email verification and password reset.
+9. **Phase 9 (Mobile PWA):** Mobile-first responsive UI overhaul, Progressive Web App (manifest + service worker), installable on Android home screen, pagination, offline static-asset caching.
+10. **Phase 10 (Browser Extension):** Chrome/Firefox extension with auto-fill, quick-search popup, and `/api/v1/` REST API backend with JWT auth — replaces the Flutter native app plan.
 
 ---
 
@@ -264,7 +265,7 @@ except ValueError:
 | `app/tests/test_rate_limit.py` | New — 252 total suite tests; rate-limit module contributes 39 tests across four classes: `TestLoginAttemptTracker` (11 unit tests — adds `test_sub_lockout_record_evicted_after_failure_window`); `TestLoginRateLimitMiddleware` (8 tests — adds `test_429_includes_retry_after_header`); `TestRateLimitInFullStack` (5 tests — adds `test_429_carries_csp_header` and `test_429_carries_retry_after_header`); `TestLockoutPageFormatting` (15 parametrized tests — all seconds/minutes singular/plural branches, HTML structure, `/login` return link); CI-tolerance widened to `55 <= remaining <= 60`; S2068 SonarQube false-positives avoided with `_WRONG_CREDENTIAL` constant |
 | `pytest.ini` | New — `filterwarnings` suppresses FastAPI's internal `HTTP_422_UNPROCESSABLE_ENTITY` deprecation noise (FastAPI internals issue, not our code); remove once FastAPI ships the renamed-constant fix |
 | `app/main.py` | Added `POST /dev/reset-lockout` endpoint (registered only when `ENVIRONMENT=development`); calls `app.state.login_tracker.reset_all()` to clear all in-memory lockout counters without a server restart; guarded by an `if settings.ENVIRONMENT == "development":` block so the route is never mounted in production; documented with a curl example |
-| `app/main.py` | Added rotating file logger — `logs/app.log` (10 MB × 5 backups); configured at import time via `logging.basicConfig` with `RotatingFileHandler`; `logs/` added to `.gitignore`; DEBUG level in development, INFO in production; noisy third-party loggers (`uvicorn.access`, `watchfiles`, `python_multipart`) suppressed to WARNING — `python_multipart` in particular fires byte-range DEBUG lines for every form field on every POST, annotating positions of sensitive fields; Phase 4 will replace with structured JSON logging and a dedicated security-audit stream |
+| `app/main.py` | Added rotating file logger — `logs/app.log` (10 MB × 5 backups); configured at import time via `logging.basicConfig` with `RotatingFileHandler`; `logs/` added to `.gitignore`; DEBUG level in development, INFO in production; noisy third-party loggers (`uvicorn.access`, `watchfiles`, `python_multipart`) suppressed to WARNING — `python_multipart` in particular fires byte-range DEBUG lines for every form field on every POST, annotating positions of sensitive fields; Phase 5 will replace with structured JSON logging and a dedicated security-audit stream |
 
 #### ❌ Still To Implement
 
@@ -274,49 +275,89 @@ _None — all Phase 2 files are implemented and hardened._ 🎉
 
 ---
 
-### Phase 3 — UX Improvements — Status: 🔴 Not Started
+### Phase 3 — TOTP Two-Factor Authentication — Status: 🔴 Not Started
+
+> **Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
+> TOTP (RFC 6238) is the industry standard — supported by Google Authenticator, Authy, 1Password, Bitwarden, etc.
+> 2FA is optional per-user: users who skip setup continue using password-only login.
 
 | File / Area | What's needed |
 |---|---|
-| `app/routes/vault.py` | Title/website text search and category filtering as query params on `GET /vault` (e.g. `?q=github&category=Work`) — no separate search route; keeps the dashboard URL canonical and avoids conflict with Phase 6's AI search endpoint |
+| `app/models/user.py` | Add `totp_secret: Mapped[str \| None]` (NULL = 2FA disabled; stored AES-GCM encrypted — same key as vault), `totp_enabled: Mapped[bool]` (default False) |
+| `app/models/recovery_code.py` | `RecoveryCode` ORM model — `user_id` FK, `code_hash` (Argon2id hash of 8-char alphanumeric code), `used_at` timestamp (NULL = unused); 8 codes generated at 2FA setup, each usable exactly once |
+| `app/migrations/` | New Alembic migration for `totp_secret`, `totp_enabled` columns on `users` and new `recovery_codes` table |
+| `app/security/totp.py` | New module — `generate_secret() -> str` (`pyotp.random_base32()`); `get_provisioning_uri(secret, issuer) -> str` (for QR code); `verify_totp(secret, token, valid_window=1) -> bool`; `generate_recovery_codes() -> list[str]` (8 × 8-char codes, `secrets.token_urlsafe`); `hash_recovery_code(code) -> str` (Argon2id); `verify_recovery_code(code, hash) -> bool` |
+| `app/services/auth_service.py` | `enable_2fa(user_id, secret, confirmation_token, db) -> list[str]` — verifies the first TOTP code before activating, returns recovery codes; `disable_2fa(user_id, db)`; extend `login()` to return a `requires_totp=True` flag when 2FA is enabled (so the route redirects to the TOTP prompt instead of directly to /vault) |
+| `app/routes/auth.py` | Add `GET /2fa/setup` + `POST /2fa/setup` (render QR code, accept confirmation code, return recovery codes); `GET /2fa/verify` + `POST /2fa/verify` (TOTP prompt mid-login); `POST /2fa/disable`; update `POST /login` flow to redirect to `/2fa/verify` when `requires_totp=True`; use `session["pending_user_id"]` for the mid-login state so AuthGuard still blocks /vault until 2FA is passed |
+| `app/templates/2fa_setup.html` | QR code image (`<img src="data:image/png;base64,...">` — generated server-side with `qrcode[pil]`); manual secret entry fallback; recovery codes display (shown once — "save these now" warning); confirm-first-code form |
+| `app/templates/2fa_verify.html` | 6-digit TOTP code input; "Use recovery code" link |
+| `app/templates/2fa_recovery.html` | Recovery code text input; redirects back to TOTP verify on wrong code |
+| `app/middleware/auth_guard.py` | Exempt `/2fa/verify` and `/2fa/recovery` from the encryption-key check (user is mid-login: password passed, TOTP not yet); add `/2fa/*` to setup exempt paths |
+| `requirements.txt` | Add `pyotp>=2.9` and `qrcode[pil]>=7.4` |
+| `app/tests/test_totp.py` | Unit tests: secret generation format, URI format, TOTP verification (valid/invalid/expired), recovery code generation (length, uniqueness), recovery code hashing round-trip |
+| `app/tests/test_auth_routes.py` | Integration tests: 2FA setup flow, TOTP verify blocks vault before code, recovery code invalidated after use, disable 2FA, login without 2FA still works |
+
+> ⚠️ **TOTP secret storage:** The secret must be encrypted at rest — treat it like a vault credential. Use `encrypt_field_gcm(secret, encryption_key)` and store the ciphertext in `users.totp_secret`. Decrypt at login time the same way vault fields are decrypted. Never log the plaintext secret.
+>
+> ⚠️ **Mid-login session state:** Use `session["pending_user_id"]` to track a user who has passed the password check but not yet the TOTP check. Clear this key on: TOTP success (replace with full session), TOTP failure after N attempts (lock), or any navigation away from `/2fa/verify`. `AuthGuard` must NOT grant access to the vault based on `pending_user_id` — only a fully established `encryption_key` in session grants access.
+
+---
+
+### Phase 4 — UX Improvements — Status: 🔴 Not Started
+
+| File / Area | What's needed |
+|---|---|
+| `app/routes/vault.py` | Title/website text search and category filtering as query params on `GET /vault` (e.g. `?q=github&category=Work`) — no separate search route; keeps the dashboard URL canonical and avoids conflict with Phase 7's AI search endpoint |
 | `app/services/vault_service.py` | `search_entries()` — filter on plaintext fields only (`title`, `website`, `category`); never decrypt to search |
 | `app/templates/vault.html` | Search bar; category filter dropdown; dark mode toggle |
 | `app/templates/entry_form.html` | Password generator button; password strength indicator |
 | `app/static/js/` | Clipboard auto-clear after configurable timeout; dark mode persistence (localStorage); password generator logic |
+| `app/routes/vault.py` | `GET /vault/export` → KeePass XML / LastPass CSV download (decrypted — warn user); `POST /vault/import` → parse and bulk-insert entries; import preview before commit |
+| `app/services/vault_service.py` | `export_entries_csv()`, `export_entries_xml()`, `import_entries_csv()`, `import_entries_xml()` — import always re-encrypts with current key |
+| `app/templates/import_export.html` | Import/export UI with format selector and security warning ("exported file contains plaintext passwords — store securely") |
 
 ---
 
-### Phase 4 — Engineering Quality — Status: 🔴 Not Started
+### Phase 5 — Engineering Quality — Status: 🔴 Not Started
 
 | File / Area | What's needed |
 |---|---|
-| `app/tests/` | Expand coverage to ≥80%; add integration tests for Phase 2 + 3 features |
+| `app/tests/` | Expand coverage to ≥80%; add integration tests for Phase 2 + 3 + 4 features |
 | All `app/` modules | Full type hints on all public functions and classes |
 | All `app/` files | `ruff check app/` zero violations |
 | All `app/` files | Structured logging — verify no secrets appear in any log output |
 | `README.md` | Project overview, architecture diagram, setup instructions, screenshots, security design notes, roadmap |
-| `docs/architecture.md` | Architecture documentation — include the server-side decryption limitation, middleware order reasoning, and session cookie encryption decision |
-| `docs/threat_model.md` | Threat model document — must cover: XSS (catastrophic for a password manager; mitigated by CSP + Jinja2 auto-escape), session cookie exposure (mitigated by encrypted sessions), server-side decryption (accepted trade-off), Python memory zeroing limitation (GC does not zero memory; `bytearray` helps but strings are immutable — document as known limitation) |
-| `docs/security_audit_log.md` | Security audit logging strategy — login success/failure, admin actions, suspicious activity; logged to a dedicated stream separate from app debug logs; must never contain passwords, keys, or decrypted values |
+| `docs/architecture.md` | Architecture documentation — include the server-side decryption limitation, middleware order reasoning, session cookie encryption decision, and 2FA mid-login session design |
+| `docs/threat_model.md` | Threat model document — must cover: XSS (catastrophic for a password manager; mitigated by CSP + Jinja2 auto-escape), session cookie exposure (mitigated by encrypted sessions), server-side decryption (accepted trade-off), Python memory zeroing limitation (GC does not zero memory; `bytearray` helps but strings are immutable — document as known limitation), TOTP secret exposure |
+| `docs/security_audit_log.md` | Security audit logging strategy — login success/failure, 2FA events, admin actions, suspicious activity; logged to a dedicated stream separate from app debug logs; must never contain passwords, keys, or decrypted values |
 
 ---
 
-### Phase 5 — DevSecOps — Status: 🔴 Not Started
+### Phase 6 — DevSecOps + Cloud Deployment — Status: 🔴 Not Started
 
 | File / Area | What's needed |
 |---|---|
-| `Dockerfile` | Multi-stage build; non-root user; minimal base image |
-| `docker-compose.yml` | Full stack up from cold machine; volume mount for `securevault.db` |
+| `Dockerfile` | Multi-stage build; non-root user; minimal base image (`python:3.13-slim`) |
+| `docker-compose.yml` | Full stack up from cold machine; volume mount for `securevault.db` and `logs/` |
 | `.github/workflows/ci.yml` | GitHub Actions CI — runs `pytest`, `ruff check`, `pip-audit` on every push; fails on violations |
 | `pip-audit` | Dependency vulnerability scan — zero known critical CVEs required |
 | Trufflehog / GitHub secret scanning | Secret scanning enabled; no secrets committed to the repository |
-| `.dockerignore` | Exclude `.env`, `*.db`, `__pycache__`, `venv/`, `.git/` from Docker build context — prevents secrets and vault data entering the image |
+| `.dockerignore` | Exclude `.env`, `*.db`, `__pycache__`, `venv/`, `.git/`, `logs/` from Docker build context — prevents secrets and vault data entering the image |
+| Cloud deployment | **AWS EC2 t3.micro** (free tier 12 months, then ~$8/month); Ubuntu 24.04 LTS; stack: Route 53 (DNS) → EC2 → nginx (443/TLS) → uvicorn (8000, loopback) → FastAPI; SQLite on a separate EBS volume so the DB survives instance replacement; Elastic IP for a stable public address |
+| `nginx/securevault.conf` | nginx config — HTTP→HTTPS redirect, TLS via certbot (Let's Encrypt), TLS 1.2+ with strong cipher suite, `proxy_pass http://127.0.0.1:8000`, `X-Forwarded-For` forwarding for correct rate-limiter IP tracking |
+| `systemd/securevault.service` | systemd unit file — runs uvicorn as a non-root user, `Restart=always`, `EnvironmentFile=/etc/securevault/env` (secrets never in the unit file itself) |
+| `docs/deployment.md` | Step-by-step AWS EC2 deployment guide: launch t3.micro (Ubuntu 24.04), security group (ports 22/80/443 only), Elastic IP, nginx + certbot install, systemd unit, EBS volume for DB, GitHub Actions SSH deploy workflow, server hardening (UFW, fail2ban, non-root app user) |
+
+> 💡 **Why AWS EC2 over Azure App Service:** EC2 gives you full OS access — you configure nginx, TLS, and systemd yourself. This teaches infrastructure skills that transfer everywhere. Azure App Service abstracts all of this away, which is faster to deploy but teaches less. Use EC2 for learning depth; App Service if you just need it live quickly.
+>
+> ⚠️ **Rate limiter and reverse proxy:** When nginx is in front, `request.client.host` is the proxy's IP, not the user's. Update `LoginRateLimitMiddleware` to read `X-Forwarded-For` (only when `ENVIRONMENT=production` — never trust this header in dev). Document this in `docs/deployment.md`.
 
 ---
 
-### Phase 6 — GenAI Integration — Status: 🔴 Not Started
+### Phase 7 — GenAI Integration — Status: 🔴 Not Started
 
 > **Goal:** Add AI-powered security intelligence while keeping all sensitive data strictly local.
+> **Scope (3 features):** Strength Analyzer, Smart Entry Assistant, Breach Detection. Auto-categorization and natural language search were descoped — their value/effort ratio is too low for a personal vault.
 > **Critical:** Never send decrypted passwords, usernames, or notes to any external AI API.
 > Only metadata is safe to transmit (see [GenAI Security Rules](#genai-security-rules-applies-to-all-phases)).
 
@@ -327,18 +368,15 @@ _None — all Phase 2 files are implemented and hardened._ 🎉
 | `app/routes/ai.py` | Thin route handlers for all AI features, delegating to `ai_service` |
 | `app/config/settings.py` | Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` settings |
 | `.env` | Add `ANTHROPIC_API_KEY` and `HIBP_API_KEY` variables |
-| **6.1 Password Strength Analyzer** | `GET /vault/analyze` — extract metadata only, send to Claude API, return prioritised recommendations (potential reuse indicators flagged by same length + complexity metrics — approximation only, actual reuse detection requires comparing passwords which is forbidden; stale passwords ≥6 months; weak by metrics; incomplete entries); "Analyze Vault" button on dashboard; results in security report modal |
-| **6.2 Security Audit Assistant** | `GET /vault/audit` page — full vault security score 0–100; score breakdown (strength, age, reuse, coverage); prioritised action list |
-| **6.3 Smart Entry Assistant** | `POST /entry/smart-fill` — user pastes any text; Claude extracts title, website, username, category; pre-fills add-entry form; user reviews before saving; "Smart Fill" button on `entry_form.html` |
-| **6.4 Auto-categorization** | Real-time category suggestion when user types title + website; shown as clickable chip below category field; accepted or ignored by user; common categories: Work, Personal, Banking, Social, Entertainment, Shopping, Development |
-| **6.5 Natural Language Vault Search** | `GET /vault/ai-search?q=` — deliberately separate from Phase 3's text search on `GET /vault?q=`; Claude interprets free-text query and maps to entry filters (e.g. "streaming services" → Netflix/Spotify; "old passwords" → entries not updated in 1 year); cache responses keyed on the query string for 5 minutes in-memory to avoid duplicate API calls on repeated searches |
-| **6.6 Breach Detection Assistant** | `GET /vault/breach-check` — checks website domain names (never passwords) against HaveIBeenPwned API; breach warning badges on dashboard; results cached in a `breach_cache(domain, is_breached, checked_at)` SQLite table for 24 hours — survives server restarts unlike in-memory cache |
+| **7.1 Password Strength Analyzer** | `GET /vault/analyze` — extract metadata only, send to Claude API, return prioritised recommendations (potential reuse indicators flagged by same length + complexity metrics; stale passwords ≥6 months; weak by metrics; incomplete entries); "Analyze Vault" button on dashboard; results in security report modal |
+| **7.2 Smart Entry Assistant** | `POST /entry/smart-fill` — user pastes any text (email, URL, app name); Claude extracts title, website, username, category; pre-fills add-entry form; user reviews before saving; "Smart Fill" button on `entry_form.html` |
+| **7.3 Breach Detection** | `GET /vault/breach-check` — checks website domain names (never passwords) against HaveIBeenPwned API; breach warning badges on dashboard; results cached in a `breach_cache(domain, is_breached, checked_at)` SQLite table for 24 hours — survives server restarts unlike in-memory cache |
 | `app/models/breach_cache.py` | `BreachCache` ORM model — `domain`, `is_breached`, `checked_at`; TTL check in `ai_service` (re-fetch if `checked_at` > 24 h ago) |
 | `app/migrations/` | New Alembic migration for `breach_cache` table |
 
 ---
 
-### Phase 7 — Multi-User Support — Status: 🔴 Not Started
+### Phase 8 — Multi-User Support — Status: 🔴 Not Started
 
 > **Goal:** Support multiple independent users on the same instance.
 > Foundation already exists: `user_id` FK on all vault entries ✅, all queries filter by `user_id` ✅, `kdf_salt` unique=True ✅.
@@ -365,7 +403,7 @@ _None — all Phase 2 files are implemented and hardened._ 🎉
 
 ---
 
-### Phase 8 — Mobile PWA — Status: 🔴 Not Started
+### Phase 9 — Mobile PWA — Status: 🔴 Not Started
 
 > **Goal:** Make the vault fully usable on mobile and installable as a Progressive Web App. No backend changes needed.
 
@@ -380,22 +418,32 @@ _None — all Phase 2 files are implemented and hardened._ 🎉
 
 ---
 
-### Phase 9 — Native Mobile App — Status: 🔴 Not Started
+### Phase 10 — Browser Extension — Status: 🔴 Not Started
 
-> **Prerequisites:** Phase 5 (Docker/deployment) complete · Phase 7 (Multi-user) complete · HTTPS certificate in place.
-> **Dual-auth trade-off:** This phase runs session-cookie auth (web) and JWT auth (mobile API) in parallel. This is intentional — browsers use sessions, native clients use tokens — but it creates two auth code paths in `auth_guard.py` and doubles auth test surface. Document this explicitly; don't try to unify them.
+> **Goal:** Chrome/Firefox extension that auto-fills credentials and provides quick vault search — far more useful day-to-day than a native mobile app.
+> **Prerequisites:** Phase 6 (cloud deployment + HTTPS) · Phase 8 (Multi-User, for username-based auth).
+> **Replaces:** the original Flutter native app plan (Phase 9 in old numbering).
 
 | File / Area | What's needed |
 |---|---|
-| `app/routes/api.py` | New router: `/api/v1/` JSON endpoints mirroring all HTML routes (vault CRUD + auth) |
+| **Backend — REST API** | |
+| `app/routes/api.py` | New router: `/api/v1/` JSON endpoints for vault CRUD + auth; consumed by extension |
 | `app/schemas/api.py` | JSON request/response schemas for the REST API |
-| `app/security/tokens.py` | JWT access + refresh token generation and verification (`PyJWT` — prefer over `python-jose` which has had CVEs and is less actively maintained) |
-| `app/routes/auth.py` | Add `POST /api/v1/login` → returns `{access_token, refresh_token}`; `POST /api/v1/logout` → revoke refresh token (mark JTI as revoked in `revoked_tokens` table); access tokens expire naturally after short TTL (15 min) — do not blacklist access tokens per-request |
-| `app/models/revoked_token.py` | `RevokedToken` ORM model — stores revoked refresh token JTIs with expiry timestamp; checked only on token refresh, not on every API request |
+| `app/security/tokens.py` | JWT access + refresh token generation and verification (`PyJWT`); access token TTL 15 min; refresh token TTL 7 days |
+| `app/routes/auth.py` | Add `POST /api/v1/login` → `{access_token, refresh_token}`; `POST /api/v1/refresh`; `POST /api/v1/logout` → revoke JTI |
+| `app/models/revoked_token.py` | `RevokedToken` ORM model — revoked refresh token JTIs with expiry; checked only on refresh, not every request |
 | `app/migrations/` | New Alembic migration for `revoked_tokens` table |
 | `app/middleware/auth_guard.py` | Extend to accept `Authorization: Bearer <token>` on `/api/v1/*` routes |
-| `app/main.py` | CORS configuration — required for browser-based clients (PWA or future React SPA served from a different origin); native Flutter HTTP calls do not need CORS but including it is harmless and future-proofs the API |
-| `mobile/` | Flutter project — consumes `/api/v1/`; native biometric auth (flutter_local_auth); secure storage (iOS Keychain / Android Keystore via flutter_secure_storage); auto-lock when app backgrounds; push notifications for breach alerts |
+| `app/main.py` | CORS configuration for extension origin (add extension ID to allowed origins in production) |
+| **Extension frontend** | |
+| `extension/manifest.json` | Manifest V3; permissions: `storage`, `activeTab`, `scripting`; host_permissions: `https://your-server/*` |
+| `extension/popup/` | HTML + JS popup — login form (first time), vault search, click-to-fill button |
+| `extension/content/autofill.js` | Content script — detect `<input type="password">` and associated username fields; inject fill buttons; never store passwords in extension storage beyond the current tab session |
+| `extension/background/` | Service worker — token refresh logic; message bridge between popup and content script |
+| `extension/` | `package.json` with build tooling (esbuild or webpack) to bundle the extension |
+| `docs/extension.md` | Load unpacked extension guide; how to connect to local dev server vs. cloud server |
+
+> ⚠️ **Extension security:** Credentials must NEVER be written to `chrome.storage` — only held in the service worker's in-memory state for the duration of the session. Tokens should be stored in `chrome.storage.session` (cleared on browser close) not `chrome.storage.local` (persists). The content script must not inject passwords directly into the DOM as attribute values — use the browser's native autofill APIs where possible, or post to the input value via `dispatchEvent` to avoid leaking via `data-*` attributes.
 
 ---
 
