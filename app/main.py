@@ -100,6 +100,10 @@ logging.basicConfig(
 # Suppress noisy third-party loggers that flood the file with irrelevant lines.
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
+# python-multipart fires DEBUG lines for every byte-range of every form field
+# (e.g. "on_field_data with data[176:193]") — useless for app debugging and
+# mildly sensitive (annotates byte positions of form fields including passwords).
+logging.getLogger("python_multipart").setLevel(logging.WARNING)
 from app.middleware.auth_guard import AuthGuard
 from app.middleware.csrf import CSRFMiddleware
 from app.middleware.csp import CSPMiddleware
