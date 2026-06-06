@@ -140,6 +140,22 @@ _X_FRAME_OPTIONS_VALUE = "DENY"
 _X_CONTENT_TYPE_OPTIONS_NAME  = "X-Content-Type-Options"
 _X_CONTENT_TYPE_OPTIONS_VALUE = "nosniff"
 
+# HTTP Strict Transport Security — instructs browsers that have ever visited
+# the site over HTTPS to refuse plain HTTP connections for the next 2 years,
+# even before a redirect fires.  This closes the window where a network
+# attacker could intercept the very first HTTP request and downgrade to HTTP.
+#
+# max-age=63072000 = 2 years in seconds.
+# includeSubDomains = apply the policy to all subdomains.
+#
+# NOTE: This header has no effect over plain HTTP (the browser ignores it).
+# It only activates once the site is served over HTTPS — i.e., after the
+# AWS EC2 + nginx + certbot deployment in Phase 6.  Sending it over HTTP
+# during local development is harmless (ignored), so we set it unconditionally
+# rather than gating it on ENVIRONMENT=production.
+_HSTS_NAME  = "Strict-Transport-Security"
+_HSTS_VALUE = "max-age=63072000; includeSubDomains"
+
 
 # ---------------------------------------------------------------------------
 # Middleware
@@ -166,4 +182,5 @@ class CSPMiddleware(BaseHTTPMiddleware):
         response.headers[_CSP_HEADER_NAME] = CSP_HEADER_VALUE
         response.headers[_X_FRAME_OPTIONS_NAME] = _X_FRAME_OPTIONS_VALUE
         response.headers[_X_CONTENT_TYPE_OPTIONS_NAME] = _X_CONTENT_TYPE_OPTIONS_VALUE
+        response.headers[_HSTS_NAME] = _HSTS_VALUE
         return response

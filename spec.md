@@ -927,6 +927,7 @@ Claude Code should:
 
 ## Future Enhancements (Optional — Beyond Phase 10)
 
+- **WebAuthn / Passkeys** — replace or complement TOTP with hardware-backed passkeys (YubiKey, Face ID, Touch ID); library: `py_webauthn`; far more phishing-resistant than TOTP since the credential is bound to the exact origin; the most modern and portfolio-impressive auth upgrade available in 2025
 - desktop packaging (e.g., PyInstaller or Tauri) — self-contained `.app` / `.exe` without running a server
 - React or HTMX frontend migration — prerequisite for browser-side encryption
 - secure memory handling — zeroize secrets after use; Python's GC and immutable strings make this impractical without `ctypes` tricks; document as a known limitation

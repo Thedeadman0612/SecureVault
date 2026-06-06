@@ -41,6 +41,8 @@ from app.middleware.csp import (
     _CSP_DIRECTIVES,
     _X_FRAME_OPTIONS_VALUE,
     _X_CONTENT_TYPE_OPTIONS_VALUE,
+    _HSTS_NAME,
+    _HSTS_VALUE,
 )
 from app.models.user import Base
 
@@ -233,10 +235,11 @@ class TestCSPDirectiveValues:
 
 
 class TestDefenceInDepthHeaders:
-    """X-Frame-Options and X-Content-Type-Options must be present on every response.
+    """X-Frame-Options, X-Content-Type-Options, and HSTS must be on every response.
 
     These complement the CSP policy for browsers that pre-date CSP or do not
-    fully enforce frame-ancestors / MIME-sniffing controls.
+    fully enforce frame-ancestors / MIME-sniffing controls.  HSTS prevents
+    protocol downgrade attacks once the site has been visited over HTTPS.
     """
 
     def test_x_frame_options_present_on_login(self, client: TestClient):
@@ -266,3 +269,38 @@ class TestDefenceInDepthHeaders:
         r = client.post("/login", data={"csrf_token": ""})
         assert r.status_code == 403
         assert r.headers.get("x-content-type-options") == _X_CONTENT_TYPE_OPTIONS_VALUE
+
+    def test_hsts_present_on_login(self, client: TestClient):
+        """HSTS header must appear on all responses, including plain GET pages.
+
+        Over HTTP (local dev / TestClient) the browser ignores HSTS, so it is
+        safe to send unconditionally.  Over HTTPS (production) the browser will
+        enforce strict transport for max-age seconds after the first visit.
+        """
+        r = client.get("/login")
+        assert r.headers.get(_HSTS_NAME.lower()) == _HSTS_VALUE
+
+    def test_hsts_present_on_redirect(self, client: TestClient):
+        """HSTS must appear on 302 redirect responses."""
+        r = client.get("/vault", follow_redirects=False)
+        assert r.headers.get(_HSTS_NAME.lower()) == _HSTS_VALUE
+
+    def test_hsts_present_on_csrf_403(self, client: TestClient):
+        """HSTS must appear on inner-middleware error responses (403)."""
+        r = client.post("/login", data={"csrf_token": ""})
+        assert r.status_code == 403
+        assert r.headers.get(_HSTS_NAME.lower()) == _HSTS_VALUE
+
+    def test_hsts_value_contains_max_age(self, client: TestClient):
+        """HSTS max-age must be at least 1 year (31536000 s); we use 2 years."""
+        r = client.get("/login")
+        hsts = r.headers.get(_HSTS_NAME.lower(), "")
+        assert "max-age=" in hsts
+        max_age = int(hsts.split("max-age=")[1].split(";")[0].strip())
+        assert max_age >= 31_536_000, "HSTS max-age must be ≥ 1 year"
+
+    def test_hsts_includes_subdomains(self, client: TestClient):
+        """HSTS must include the includeSubDomains directive."""
+        r = client.get("/login")
+        hsts = r.headers.get(_HSTS_NAME.lower(), "")
+        assert "includeSubDomains" in hsts
