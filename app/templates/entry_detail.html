@@ -7,6 +7,7 @@
   <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
     <a href="/vault" class="text-indigo-600 font-semibold text-lg">🔒 SecureVault</a>
     <form method="POST" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
       <button
         type="submit"
         class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
@@ -45,13 +46,15 @@
       </a>
       {#
         Delete uses a POST form — HTML forms only support GET and POST.
-        The confirm dialog prevents accidental deletion.
+        The confirm dialog is attached via addEventListener in entry_detail.js
+        (inline onsubmit is blocked by Content-Security-Policy).
       #}
       <form
+        id="delete-form"
         method="POST"
         action="/entry/{{ entry.id }}/delete"
-        onsubmit="return confirm('Delete this entry? This cannot be undone.')"
       >
+        <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
         <button
           type="submit"
           class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg
@@ -94,9 +97,15 @@
     <div class="px-6 py-4 flex items-center gap-4">
       <span class="text-sm text-gray-500 w-28 shrink-0">Username</span>
       <span class="text-sm text-gray-900 font-mono flex-1 break-all">{{ entry.username }}</span>
+      {#
+        data-copy holds the username value for entry_detail.js to read.
+        Jinja2 auto-escapes the value in HTML attribute context (" → &quot; etc.);
+        the browser unescapes it back to the original string when JS reads .dataset.copy.
+      #}
       <button
         type="button"
-        onclick="copyValue({{ entry.username | tojson }}, this)"
+        id="copy-username-btn"
+        data-copy="{{ entry.username }}"
         class="shrink-0 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
       >
         Copy
@@ -114,17 +123,17 @@
         ••••••••
       </span>
       <div class="flex items-center gap-3 shrink-0">
+        {# onclick removed — event listeners attached in entry_detail.js (CSP compliance). #}
         <button
           type="button"
           id="toggle-password-btn"
-          onclick="togglePassword()"
           class="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
         >
           Show
         </button>
         <button
           type="button"
-          onclick="copyValue(_password, this)"
+          id="copy-password-btn"
           class="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
         >
           Copy
@@ -154,35 +163,15 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
   {#
-    The password value is already in the rendered HTML page (sent from the
-    server). togglePassword() and copyValue() read it from a JS variable set
-    at page-load time — never from an embedded string literal in each call,
-    which keeps the logic DRY.
-    tojson ensures the value is safely escaped as a JSON string literal.
+    Hidden input: the server renders the password value here so that the
+    external JS file (entry_detail.js) can read it via input.value.
+    CSP's script-src 'self' blocks inline <script> tags, so we can no longer
+    write `const _password = "{{ entry.password }}"` in an inline script.
+    Using a hidden input is CSP-compliant and has identical security — the
+    password is already in the HTML page (the server decrypted it before render).
+    Jinja2 auto-escapes the value in HTML attribute context.
   #}
-  const _password = {{ entry.password | tojson }};
-
-  function togglePassword() {
-    const display = document.getElementById('password-display');
-    const btn     = document.getElementById('toggle-password-btn');
-    const showing = btn.textContent === 'Hide';
-    display.textContent = showing ? '••••••••' : _password;
-    display.classList.toggle('tracking-widest', showing);
-    btn.textContent = showing ? 'Show' : 'Hide';
-  }
-
-  function copyValue(value, btn) {
-    navigator.clipboard.writeText(value).then(() => {
-      const orig = btn.textContent;
-      btn.textContent = 'Copied!';
-      btn.classList.add('text-green-600');
-      setTimeout(() => {
-        btn.textContent = orig;
-        btn.classList.remove('text-green-600');
-      }, 1500);
-    });
-  }
-</script>
+  <input type="hidden" id="sv-password-value" value="{{ entry.password }}">
+  <script src="/static/js/entry_detail.js"></script>
 {% endblock %}

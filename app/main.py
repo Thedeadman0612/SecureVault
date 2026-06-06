@@ -5,17 +5,30 @@ FastAPI application factory: middleware stack, routers, static files, and
 global error handlers.
 
 MIDDLEWARE ORDER (outermost → innermost, i.e. request processing order):
-  1. SessionMiddleware  — decodes the signed session cookie into request.session.
-  2. AuthGuard          — inspects request.session["encryption_key"]; redirects
-                          unauthenticated requests to /login before any route
-                          handler is invoked.
+  1. CSPMiddleware               — stamps Content-Security-Policy on every response.
+                                    Outermost so it covers error pages from all inner layers.
+  2. EncryptedSessionMiddleware  — decrypts the Fernet-encrypted session cookie into
+                                    scope["session"] = request.session.
+  3. CSRFMiddleware              — validates the CSRF token stored in the session;
+                                    exposes request.state.csrf_token for templates.
+  4. LoginRateLimitMiddleware    — enforces a failed-attempt lockout on POST /login.
+                                    Sits INSIDE CSRFMiddleware so only CSRF-validated
+                                    requests count as genuine password attempts.
+  5. AuthGuard                   — checks request.session["encryption_key"]; redirects
+                                    unauthenticated requests to /login.
 
   In FastAPI/Starlette, add_middleware() stacks in reverse — the LAST call
-  produces the OUTERMOST layer. So SessionMiddleware is added last to ensure
-  it runs first:
+  produces the OUTERMOST layer.  Add order:
 
-    app.add_middleware(AuthGuard)              # added first → innermost
-    app.add_middleware(SessionMiddleware, ...) # added last  → outermost
+    app.add_middleware(AuthGuard)                          # added first  → innermost
+    app.add_middleware(LoginRateLimitMiddleware)           # added second → inside CSRF
+    app.add_middleware(CSRFMiddleware)                     # added third  → outside LRL
+    app.add_middleware(EncryptedSessionMiddleware, ...)    # added fourth → middle-outer
+    app.add_middleware(CSPMiddleware)                      # added last   → outermost
+
+  LoginRateLimitMiddleware inside CSRFMiddleware ensures bots without valid
+  CSRF tokens get a 403 and never inflate the failure counter.  429 lockout
+  responses still receive the CSP header (CSPMiddleware wraps everything).
 
 GLOBAL ERROR HANDLERS:
   404 Not Found         — generic HTML page; no internal path or DB detail.
@@ -31,14 +44,71 @@ ROUTERS:
 """
 
 import logging
+import logging.handlers
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.sessions import SessionMiddleware
-
 from app.config.settings import settings
+
+
+# ---------------------------------------------------------------------------
+# Logging configuration
+# ---------------------------------------------------------------------------
+# Configures the root logger once at import time.
+#
+# Two handlers:
+#   stderr  — always active; uvicorn shows this in the terminal during dev.
+#   file    — rotating log at logs/app.log (10 MB × 5 backups ≈ 50 MB cap).
+#             Created here so all app loggers (rate_limit, csrf, vault, etc.)
+#             write to the same file automatically via the root logger.
+#
+# Format includes timestamp, level, logger name, and message so log lines are
+# self-contained when tailing the file:
+#   2024-06-06 14:32:01,123 WARNING  app.middleware.rate_limit — Login lockout triggered …
+#
+# Phase 4 will replace this with structured JSON logging and a dedicated
+# security-audit stream (separate file, never mixed with debug output).
+
+_LOG_DIR = Path(__file__).parent.parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+
+_LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+# Root-logger level: DEBUG in development, INFO in production.
+_root_level = logging.DEBUG if settings.ENVIRONMENT == "development" else logging.INFO
+
+logging.basicConfig(
+    level=_root_level,
+    format=_LOG_FORMAT,
+    datefmt=_LOG_DATEFMT,
+    handlers=[
+        # Terminal output (uvicorn / stdout).
+        logging.StreamHandler(),
+        # Rotating file: 10 MB per file, keep last 5 rotations.
+        logging.handlers.RotatingFileHandler(
+            _LOG_DIR / "app.log",
+            maxBytes=10 * 1024 * 1024,   # 10 MB
+            backupCount=5,
+            encoding="utf-8",
+        ),
+    ],
+)
+
+# Suppress noisy third-party loggers that flood the file with irrelevant lines.
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
+# python-multipart fires DEBUG lines for every byte-range of every form field
+# (e.g. "on_field_data with data[176:193]") — useless for app debugging and
+# mildly sensitive (annotates byte positions of form fields including passwords).
+logging.getLogger("python_multipart").setLevel(logging.WARNING)
 from app.middleware.auth_guard import AuthGuard
+from app.middleware.csrf import CSRFMiddleware
+from app.middleware.csp import CSPMiddleware
+from app.middleware.encrypted_session import EncryptedSessionMiddleware
+from app.middleware.rate_limit import LoginRateLimitMiddleware, _LoginAttemptTracker
 from app.routes import auth, vault
 
 logger = logging.getLogger(__name__)
@@ -69,18 +139,49 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # (Last added = outermost = runs first on incoming requests.)
 # ---------------------------------------------------------------------------
 
-# AuthGuard — innermost; reads the session set up by SessionMiddleware.
+# AuthGuard — innermost; reads the session populated by EncryptedSessionMiddleware.
 app.add_middleware(AuthGuard)
 
-# SessionMiddleware — outermost; decodes the signed cookie first.
+# LoginRateLimitMiddleware — inside CSRFMiddleware so only CSRF-validated
+# requests (i.e. genuine password attempts) count toward the failure limit.
+# Returns 429 when the IP is locked; records failure on 401, resets on 303.
+#
+# The tracker is created explicitly and stored on app.state so test fixtures
+# can call app.state.login_tracker.reset_all() to prevent cross-test
+# contamination (multiple wrong-password tests would otherwise exhaust the
+# limit and lock out the shared test IP).
+_login_tracker = _LoginAttemptTracker()
+app.state.login_tracker = _login_tracker
+app.add_middleware(LoginRateLimitMiddleware, _tracker_override=_login_tracker)
+
+# CSRFMiddleware — outside LoginRateLimitMiddleware; bots without a valid
+# CSRF token are blocked here (403) before the rate limiter ever sees them.
+app.add_middleware(CSRFMiddleware)
+
+# EncryptedSessionMiddleware — middle-outer; ENCRYPTS (not just signs) the
+# session cookie so that the vault encryption key stored in the session is
+# opaque to anyone who can read the raw cookie value.
+#
+# Uses Fernet (AES-128-CBC + HMAC-SHA256) with a key derived from SECRET_KEY
+# via HKDF-SHA256.  Replaces the Phase 1 SessionMiddleware which only signed
+# the cookie with itsdangerous (payload was base64-readable without the key).
+#
+# Parameter meanings are identical to the old SessionMiddleware:
+#   https_only: True in production; False only with ENVIRONMENT=development.
+#   same_site:  "strict" — cookie never sent on any cross-site request.
 app.add_middleware(
-    SessionMiddleware,
+    EncryptedSessionMiddleware,
     secret_key=settings.SECRET_KEY,
     max_age=settings.SESSION_TIMEOUT_MINUTES * 60,
-    session_cookie="sv_session",   # non-default name avoids collisions
-    https_only=False,              # Phase 1: local dev; set True in Phase 2
-    same_site="lax",               # Phase 2: harden to "strict" with CSRF token
+    session_cookie="sv_session",                           # non-default name avoids collisions
+    https_only=settings.ENVIRONMENT != "development",      # False only in local dev
+    same_site="strict",                                    # hardened from "lax" in Phase 2
 )
+
+# CSPMiddleware — outermost; added last so it wraps every other layer.
+# Stamps Content-Security-Policy on ALL responses including CSRF/session errors.
+# Needs no session data, so placement relative to SessionMiddleware is flexible.
+app.add_middleware(CSPMiddleware)
 
 # ---------------------------------------------------------------------------
 # Routers
@@ -99,6 +200,33 @@ async def root() -> RedirectResponse:
     authenticated users, sending them straight to /vault.
     """
     return RedirectResponse(url="/vault", status_code=status.HTTP_302_FOUND)
+
+
+# ---------------------------------------------------------------------------
+# Development-only utilities
+# ---------------------------------------------------------------------------
+
+if settings.ENVIRONMENT == "development":
+    from fastapi.responses import JSONResponse
+
+    @app.post("/dev/reset-lockout")
+    async def dev_reset_lockout() -> JSONResponse:
+        """Clear all in-memory login-lockout counters (development only).
+
+        This endpoint is ONLY registered when ENVIRONMENT=development.
+        It does not exist in production — the route is never mounted.
+
+        Use this during local testing to unblock a locked-out IP without
+        restarting the server.  The lockout tracker is purely in-memory so
+        a server restart has the same effect; this endpoint is purely for
+        convenience.
+
+        Example:
+            curl -X POST http://localhost:8000/dev/reset-lockout
+        """
+        app.state.login_tracker.reset_all()
+        logger.info("dev/reset-lockout: all login-lockout counters cleared")
+        return JSONResponse({"detail": "All login-lockout counters have been reset."})
 
 # ---------------------------------------------------------------------------
 # Global error handlers
