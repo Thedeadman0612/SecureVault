@@ -304,9 +304,10 @@ Use SQLAlchemy ORM. Avoid raw SQL unless necessary. All queries must use paramet
 | `user_id` | Integer | Foreign key → `users.id` |
 | `title` | String | Plaintext |
 | `website` | String | Plaintext |
-| `username_encrypted` | String | Encrypted (base64 Fernet token) |
-| `password_encrypted` | String | Encrypted (base64 Fernet token) |
-| `notes_encrypted` | String | Encrypted (base64 Fernet token) |
+| `username_encrypted` | String | Encrypted (AES-256-GCM for new entries; Fernet for legacy, re-encrypted lazily) |
+| `password_encrypted` | String | Encrypted (AES-256-GCM for new entries; Fernet for legacy, re-encrypted lazily) |
+| `notes_encrypted` | String | Encrypted (AES-256-GCM for new entries; Fernet for legacy, re-encrypted lazily) |
+| `encryption_version` | String | `"aesgcm"` or `"fernet"`; default `"fernet"` for pre-Phase-2 rows (added Phase 2) |
 | `category` | String | Plaintext |
 | `created_at` | DateTime | |
 | `updated_at` | DateTime | |
@@ -492,7 +493,7 @@ Search operates only on plaintext fields (`title`, `website`, `category`). Encry
 
 ## Development Phases
 
-### Phase 1 — MVP
+### Phase 1 — MVP ✅ Complete
 
 **Goal:** Build a working local secure vault.
 
@@ -509,11 +510,11 @@ Requirements:
 **Deliverable:** Functional local secure vault application.
 
 **Success Criteria:**
-- [ ] App starts without errors with a valid `.env` file
-- [ ] First run redirects to `/setup`; subsequent runs redirect to `/login`
-- [ ] A user can create, view, edit, and delete vault entries end-to-end
-- [ ] Encrypted fields in `securevault.db` are unreadable as plaintext when inspected directly
-- [ ] Logout invalidates the session and redirects to `/login`
+- [x] App starts without errors with a valid `.env` file
+- [x] First run redirects to `/setup`; subsequent runs redirect to `/login`
+- [x] A user can create, view, edit, and delete vault entries end-to-end
+- [x] Encrypted fields in `securevault.db` are unreadable as plaintext when inspected directly
+- [x] Logout invalidates the session and redirects to `/login`
 
 **Test Focus:**
 - Fernet encrypt/decrypt round-trip produces the original value
@@ -522,7 +523,7 @@ Requirements:
 - Vault CRUD operations against an in-memory SQLite test database
 - `/setup` and `/login` integration tests covering valid and invalid inputs
 
-### Phase 2 — Security Hardening
+### Phase 2 — Security Hardening ✅ Complete
 
 **Goal:** Improve security posture.
 
@@ -544,14 +545,14 @@ Requirements:
 **Deliverable:** Security-improved application.
 
 **Success Criteria:**
-- [ ] Login is rate-limited; repeated failures trigger a lockout or delay
-- [ ] CSRF tokens are required and validated on all state-changing routes
-- [ ] Session cookies are `HttpOnly`, `Secure`, and `SameSite=Strict`
-- [ ] Session payload is encrypted — the `encryption_key` value is not readable in the raw cookie
-- [ ] All responses include a CSP header; the browser console shows no CSP violations on normal usage
-- [ ] All new vault writes use AES-256-GCM; existing Fernet entries are re-encrypted lazily on first read
-- [ ] `encryption_version` column correctly reflects the algorithm used for each entry
-- [ ] No stack traces or internal error details are ever exposed in the browser
+- [x] Login is rate-limited; repeated failures trigger a lockout or delay
+- [x] CSRF tokens are required and validated on all state-changing routes
+- [x] Session cookies are `HttpOnly`, `Secure`, and `SameSite=Strict`
+- [x] Session payload is encrypted — the `encryption_key` value is not readable in the raw cookie
+- [x] All responses include a CSP header; the browser console shows no CSP violations on normal usage
+- [x] All new vault writes use AES-256-GCM; existing Fernet entries are re-encrypted lazily on first read
+- [x] `encryption_version` column correctly reflects the algorithm used for each entry
+- [x] No stack traces or internal error details are ever exposed in the browser
 
 **Test Focus:**
 - Rate limiting triggers after N failed login attempts
