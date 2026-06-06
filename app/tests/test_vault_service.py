@@ -29,9 +29,7 @@ from app.models.vault_entry import VaultEntry  # noqa: F401 — registers ORM mo
 from app.schemas.vault import VaultEntryCreate, VaultEntryUpdate
 from app.security.encryption import (
     decrypt_field_gcm,
-    derive_key,
     encrypt_field,
-    generate_kdf_salt,
 )
 from app.services import vault_service
 

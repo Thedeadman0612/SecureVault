@@ -40,11 +40,10 @@ within the real middleware stack (CSRF, encrypted session, etc.).
 """
 
 import re
-import time
 from collections.abc import Generator
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -57,7 +56,6 @@ from app.middleware.rate_limit import (
     LoginRateLimitMiddleware,
     _LoginAttemptTracker,
     _DEFAULT_MAX_FAILURES,
-    _DEFAULT_LOCKOUT_SECONDS,
     _lockout_page,
 )
 from app.models.user import Base
@@ -266,7 +264,7 @@ class TestLoginRateLimitMiddleware:
         for _ in range(_TEST_MAX_FAILURES - 1):
             response = client.post("/login")
             assert response.status_code != 429, (
-                f"Unexpected 429 before max_failures reached"
+                "Unexpected 429 before max_failures reached"
             )
 
     def test_nth_failure_triggers_lockout_on_next_attempt(self):

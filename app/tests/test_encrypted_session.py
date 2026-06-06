@@ -30,7 +30,6 @@ to verify the middleware works end-to-end in the real middleware stack.
 
 import base64
 import json
-import time
 from collections.abc import Generator
 
 import pytest

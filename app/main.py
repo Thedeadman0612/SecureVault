@@ -51,6 +51,12 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from app.config.settings import settings
+from app.middleware.auth_guard import AuthGuard
+from app.middleware.csrf import CSRFMiddleware
+from app.middleware.csp import CSPMiddleware
+from app.middleware.encrypted_session import EncryptedSessionMiddleware
+from app.middleware.rate_limit import LoginRateLimitMiddleware, _LoginAttemptTracker
+from app.routes import auth, vault
 
 
 # ---------------------------------------------------------------------------
@@ -104,12 +110,6 @@ logging.getLogger("watchfiles").setLevel(logging.WARNING)
 # (e.g. "on_field_data with data[176:193]") — useless for app debugging and
 # mildly sensitive (annotates byte positions of form fields including passwords).
 logging.getLogger("python_multipart").setLevel(logging.WARNING)
-from app.middleware.auth_guard import AuthGuard
-from app.middleware.csrf import CSRFMiddleware
-from app.middleware.csp import CSPMiddleware
-from app.middleware.encrypted_session import EncryptedSessionMiddleware
-from app.middleware.rate_limit import LoginRateLimitMiddleware, _LoginAttemptTracker
-from app.routes import auth, vault
 
 logger = logging.getLogger(__name__)
 
