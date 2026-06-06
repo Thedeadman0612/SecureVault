@@ -44,11 +44,62 @@ ROUTERS:
 """
 
 import logging
+import logging.handlers
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from app.config.settings import settings
+
+
+# ---------------------------------------------------------------------------
+# Logging configuration
+# ---------------------------------------------------------------------------
+# Configures the root logger once at import time.
+#
+# Two handlers:
+#   stderr  — always active; uvicorn shows this in the terminal during dev.
+#   file    — rotating log at logs/app.log (10 MB × 5 backups ≈ 50 MB cap).
+#             Created here so all app loggers (rate_limit, csrf, vault, etc.)
+#             write to the same file automatically via the root logger.
+#
+# Format includes timestamp, level, logger name, and message so log lines are
+# self-contained when tailing the file:
+#   2024-06-06 14:32:01,123 WARNING  app.middleware.rate_limit — Login lockout triggered …
+#
+# Phase 4 will replace this with structured JSON logging and a dedicated
+# security-audit stream (separate file, never mixed with debug output).
+
+_LOG_DIR = Path(__file__).parent.parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+
+_LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+# Root-logger level: DEBUG in development, INFO in production.
+_root_level = logging.DEBUG if settings.ENVIRONMENT == "development" else logging.INFO
+
+logging.basicConfig(
+    level=_root_level,
+    format=_LOG_FORMAT,
+    datefmt=_LOG_DATEFMT,
+    handlers=[
+        # Terminal output (uvicorn / stdout).
+        logging.StreamHandler(),
+        # Rotating file: 10 MB per file, keep last 5 rotations.
+        logging.handlers.RotatingFileHandler(
+            _LOG_DIR / "app.log",
+            maxBytes=10 * 1024 * 1024,   # 10 MB
+            backupCount=5,
+            encoding="utf-8",
+        ),
+    ],
+)
+
+# Suppress noisy third-party loggers that flood the file with irrelevant lines.
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
 from app.middleware.auth_guard import AuthGuard
 from app.middleware.csrf import CSRFMiddleware
 from app.middleware.csp import CSPMiddleware
@@ -145,6 +196,33 @@ async def root() -> RedirectResponse:
     authenticated users, sending them straight to /vault.
     """
     return RedirectResponse(url="/vault", status_code=status.HTTP_302_FOUND)
+
+
+# ---------------------------------------------------------------------------
+# Development-only utilities
+# ---------------------------------------------------------------------------
+
+if settings.ENVIRONMENT == "development":
+    from fastapi.responses import JSONResponse
+
+    @app.post("/dev/reset-lockout")
+    async def dev_reset_lockout() -> JSONResponse:
+        """Clear all in-memory login-lockout counters (development only).
+
+        This endpoint is ONLY registered when ENVIRONMENT=development.
+        It does not exist in production — the route is never mounted.
+
+        Use this during local testing to unblock a locked-out IP without
+        restarting the server.  The lockout tracker is purely in-memory so
+        a server restart has the same effect; this endpoint is purely for
+        convenience.
+
+        Example:
+            curl -X POST http://localhost:8000/dev/reset-lockout
+        """
+        app.state.login_tracker.reset_all()
+        logger.info("dev/reset-lockout: all login-lockout counters cleared")
+        return JSONResponse({"detail": "All login-lockout counters have been reset."})
 
 # ---------------------------------------------------------------------------
 # Global error handlers

@@ -36,3 +36,6 @@ app/migrations/__pycache__/
 
 # Claude auto-memory (personal, not team)
 .claude/memory/
+
+# Application logs — contain security events; never commit
+logs/
