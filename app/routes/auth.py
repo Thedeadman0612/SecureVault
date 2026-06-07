@@ -67,6 +67,7 @@ _2FA_SETUP_URL = "/2fa/setup"
 # Maximum failed TOTP attempts before the pending session is wiped and the
 # user must re-enter their password from /login.
 _MAX_TOTP_ATTEMPTS: int = 5
+_MAX_RECOVERY_ATTEMPTS: int = 5
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +174,7 @@ async def get_login(request: Request) -> HTMLResponse:
     """
     if request.session.get("encryption_key"):
         return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_302_FOUND)
-    error = request.query_params.get("error")
+    error: str | None = request.session.pop("flash_error", None)
     return templates.TemplateResponse(request, _LOGIN_TEMPLATE, {"error": error} if error else {})
 
 
@@ -273,7 +274,7 @@ async def get_2fa_setup(
     user_id: int = request.session["user_id"]
     user = db.query(User).filter(User.id == user_id).first()
 
-    secret = generate_secret()
+    secret: str = request.session.get("pending_totp_secret") or generate_secret()
     request.session["pending_totp_secret"] = secret
     uri = get_provisioning_uri(secret)
 
@@ -304,7 +305,7 @@ async def post_2fa_setup(
     On failure: re-renders the setup page with the same QR code so the user
                 can try again without re-scanning.
     """
-    user_id: int = request.session.get("user_id")  # type: ignore[assignment]
+    user_id: int | None = request.session.get("user_id")
     secret: str | None = request.session.get("pending_totp_secret")
 
     if not user_id or not secret:
@@ -350,7 +351,7 @@ async def post_2fa_disable(
     AuthGuard already requires encryption_key for this path.
     Redirects to /vault on success.
     """
-    user_id: int = request.session.get("user_id")  # type: ignore[assignment]
+    user_id: int | None = request.session.get("user_id")
     if not user_id:
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
 
@@ -398,6 +399,14 @@ async def post_2fa_verify(
     if not pending_user_id or not pending_key_b64:
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
 
+    if len(token) != 6 or not token.isdigit():
+        return templates.TemplateResponse(
+            request,
+            _2FA_VERIFY_TEMPLATE,
+            {"error": "Please enter a valid 6-digit code."},
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
     user = db.query(User).filter(User.id == pending_user_id).first()
     if not user or not user.totp_enabled or not user.totp_secret:
         request.session.clear()
@@ -419,10 +428,8 @@ async def post_2fa_verify(
                 pending_user_id,
             )
             request.session.clear()
-            return RedirectResponse(
-                url=f"{_LOGIN_URL}?error=Too+many+incorrect+codes.+Please+log+in+again.",
-                status_code=status.HTTP_302_FOUND,
-            )
+            request.session["flash_error"] = "Too many incorrect codes. Please log in again."
+            return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
         logger.warning(
             "Failed TOTP attempt %d/%d for pending user id=%d.",
             attempts,
@@ -483,6 +490,25 @@ async def post_2fa_recovery(
     if not pending_user_id or not pending_key_b64:
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
 
+    stripped_code = recovery_code.strip()
+    if not stripped_code or len(stripped_code) > 32:
+        return templates.TemplateResponse(
+            request,
+            _2FA_RECOVERY_TEMPLATE,
+            {"error": "Invalid or already-used recovery code."},
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    recovery_attempts: int = request.session.get("recovery_attempts", 0) + 1
+    if recovery_attempts > _MAX_RECOVERY_ATTEMPTS:
+        logger.warning(
+            "Recovery code attempt limit reached for pending user id=%d — wiping session.",
+            pending_user_id,
+        )
+        request.session.clear()
+        request.session["flash_error"] = "Too many incorrect codes. Please log in again."
+        return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
+
     unused_codes = (
         db.query(RecoveryCode)
         .filter(
@@ -494,11 +520,18 @@ async def post_2fa_recovery(
 
     matched: RecoveryCode | None = None
     for row in unused_codes:
-        if verify_recovery_code(recovery_code.strip(), row.code_hash):
+        if verify_recovery_code(stripped_code, row.code_hash):
             matched = row
             break
 
     if matched is None:
+        logger.warning(
+            "Invalid recovery code attempt %d/%d for pending user id=%d.",
+            recovery_attempts,
+            _MAX_RECOVERY_ATTEMPTS,
+            pending_user_id,
+        )
+        request.session["recovery_attempts"] = recovery_attempts
         return templates.TemplateResponse(
             request,
             _2FA_RECOVERY_TEMPLATE,
@@ -506,8 +539,18 @@ async def post_2fa_recovery(
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    matched.used_at = utcnow()
-    db.commit()
+    try:
+        matched.used_at = utcnow()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to mark recovery code used for user id=%d.", pending_user_id)
+        return templates.TemplateResponse(
+            request,
+            _2FA_RECOVERY_TEMPLATE,
+            {"error": "An error occurred. Please try again."},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     request.session.clear()
     request.session["encryption_key"] = pending_key_b64

@@ -245,7 +245,7 @@ def enable_2fa(
 
     # Delete any existing recovery codes (handles the re-setup case where
     # the user is cycling their 2FA configuration).
-    db.query(RecoveryCode).filter(RecoveryCode.user_id == user_id).delete()
+    db.query(RecoveryCode).filter(RecoveryCode.user_id == user_id).delete(synchronize_session=False)
 
     user.totp_secret = encrypt_field_gcm(secret, raw_key)
     user.totp_enabled = True
@@ -255,7 +255,15 @@ def enable_2fa(
     for code in codes:
         db.add(RecoveryCode(user_id=user_id, code_hash=hash_recovery_code(code)))
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to persist 2FA settings for user id=%d.", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enable 2FA. Please try again.",
+        )
     logger.info("2FA enabled for user id=%d; %d recovery codes issued.", user_id, len(codes))
     return codes
 
@@ -280,6 +288,14 @@ def disable_2fa(user_id: int, db: Session) -> None:
     user.totp_secret = None
     user.totp_enabled = False
     user.updated_at = utcnow()
-    db.query(RecoveryCode).filter(RecoveryCode.user_id == user_id).delete()
-    db.commit()
+    db.query(RecoveryCode).filter(RecoveryCode.user_id == user_id).delete(synchronize_session=False)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to disable 2FA for user id=%d.", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to disable 2FA. Please try again.",
+        )
     logger.info("2FA disabled for user id=%d.", user_id)

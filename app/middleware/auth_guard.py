@@ -17,19 +17,20 @@ session is already active (preventing authenticated users from seeing the
 login/setup pages).
 
 MIDDLEWARE ORDER IN main.py:
-  SessionMiddleware must run BEFORE AuthGuard so the session dict is
+  EncryptedSessionMiddleware must run BEFORE AuthGuard so the session dict is
   populated before we inspect it. In FastAPI/Starlette, the last middleware
   added with add_middleware() is the outermost (runs first on the way in).
   Therefore:
-    app.add_middleware(AuthGuard)              # innermost — runs second
-    app.add_middleware(SessionMiddleware, ...) # outermost — runs first
+    app.add_middleware(AuthGuard)                       # innermost — runs second
+    app.add_middleware(EncryptedSessionMiddleware, ...) # outermost — runs first
 
   Reading session["encryption_key"] in AuthGuard is only safe because
-  SessionMiddleware has already decoded the signed cookie by the time
-  AuthGuard.dispatch() is called.
+  EncryptedSessionMiddleware has already decrypted the Fernet-encrypted cookie
+  by the time AuthGuard.dispatch() is called.
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -65,7 +66,7 @@ class AuthGuard(BaseHTTPMiddleware):
     to decrypt entries.
     """
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         path: str = request.url.path
 
         # Pass exempt paths straight through — no session check needed.
