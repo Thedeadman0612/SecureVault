@@ -186,7 +186,6 @@ All security hardening files implemented and hardened through code review. See `
 | `app/services/auth_service.py` | Added `enable_2fa()` (verifies first code, encrypts secret AES-GCM, stores 8 hashed recovery codes); `disable_2fa()` (clears secret, deletes codes); extended `login()` to return `True` when TOTP step required (sets `pending_user_id` + `pending_encryption_key`) |
 | `app/routes/auth.py` | Added `GET/POST /2fa/setup`, `GET/POST /2fa/verify`, `GET/POST /2fa/recovery`, `POST /2fa/disable`; updated `POST /login` to redirect to `/2fa/verify` when `requires_totp=True`; QR code generated server-side via `qrcode[pil]` |
 | `app/middleware/auth_guard.py` | Exempted `/2fa/verify` and `/2fa/recovery` from encryption-key check so mid-login users can reach the TOTP prompt |
-
 | `app/tests/test_totp.py` | 18 unit tests covering `generate_secret` format/randomness, `get_provisioning_uri` structure, `verify_totp` valid/invalid/wrong-secret, `generate_recovery_codes` count/length/uniqueness, `hash_recovery_code` Argon2id format, `verify_recovery_code` correct/wrong |
 | `app/templates/2fa_setup.html` | Three-state template: setup form with QR code + manual secret fallback + confirmation input; recovery codes display (shown once with save-now warning); optional disable button when 2FA already active |
 | `app/templates/2fa_verify.html` | 6-digit TOTP input form; "Use recovery code" link to `/2fa/recovery` |

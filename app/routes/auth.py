@@ -173,7 +173,8 @@ async def get_login(request: Request) -> HTMLResponse:
     """
     if request.session.get("encryption_key"):
         return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_302_FOUND)
-    return templates.TemplateResponse(request, _LOGIN_TEMPLATE)
+    error = request.query_params.get("error")
+    return templates.TemplateResponse(request, _LOGIN_TEMPLATE, {"error": error} if error else {})
 
 
 @router.post("/login")
@@ -418,7 +419,16 @@ async def post_2fa_verify(
                 pending_user_id,
             )
             request.session.clear()
-            return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
+            return RedirectResponse(
+                url=f"{_LOGIN_URL}?error=Too+many+incorrect+codes.+Please+log+in+again.",
+                status_code=status.HTTP_302_FOUND,
+            )
+        logger.warning(
+            "Failed TOTP attempt %d/%d for pending user id=%d.",
+            attempts,
+            _MAX_TOTP_ATTEMPTS,
+            pending_user_id,
+        )
         request.session["totp_attempts"] = attempts
         return templates.TemplateResponse(
             request,
