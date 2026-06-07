@@ -38,7 +38,15 @@ from starlette.responses import RedirectResponse, Response
 logger = logging.getLogger(__name__)
 
 # Paths that do not require an active session.
-_EXEMPT_EXACT: frozenset[str] = frozenset({"/login", "/setup"})
+# /2fa/verify and /2fa/recovery are mid-login: the user has passed the
+# password check (pending_user_id in session) but encryption_key is not yet
+# set. The route handlers themselves validate the pending session state.
+_EXEMPT_EXACT: frozenset[str] = frozenset({
+    "/login",
+    "/setup",
+    "/2fa/verify",
+    "/2fa/recovery",
+})
 _EXEMPT_PREFIXES: tuple[str, ...] = ("/static/",)
 
 _LOGIN_URL = "/login"

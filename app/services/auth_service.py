@@ -35,9 +35,12 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.recovery_code import RecoveryCode
 from app.models.user import User
-from app.security.encryption import derive_key, generate_kdf_salt
+from app.security.encryption import derive_key, encrypt_field_gcm, generate_kdf_salt
 from app.security.hashing import hash_password, needs_rehash, verify_password
+from app.security.totp import generate_recovery_codes, hash_recovery_code, verify_totp
+from app.utils.helpers import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -97,17 +100,23 @@ def setup_vault(password: str, db: Session) -> User:
     return user
 
 
-def login(password: str, db: Session, session: dict) -> None:
+def login(password: str, db: Session, session: dict) -> bool:
     """Verify the master password and load the encryption key into the session.
 
     Looks up the single User row, verifies the password against the Argon2id
-    hash, derives the vault key via PBKDF2HMAC, then writes the base64-encoded
-    key and user_id into the Starlette session dict.
+    hash, derives the vault key, then either writes the full session (no 2FA)
+    or writes a pending session (2FA enabled, TOTP step still required).
 
     Args:
         password: Raw master password from LoginRequest. Never stored or logged.
         db:       SQLAlchemy session (from the get_db FastAPI dependency).
         session:  Starlette session dict (request.session). Modified in place.
+
+    Returns:
+        True  — TOTP step required; session contains pending_user_id and
+                pending_encryption_key but NOT encryption_key. The route must
+                redirect to /2fa/verify.
+        False — Login complete; session contains encryption_key and user_id.
 
     Raises:
         HTTPException 401: No user exists, or the password is wrong.
@@ -157,11 +166,22 @@ def login(password: str, db: Session, session: dict) -> None:
     # login cannot have it merged with the newly authenticated session.
     session.clear()
 
-    # Store as URL-safe base64 string — Starlette sessions must be JSON-serialisable.
-    # vault_service recovers raw bytes with base64.urlsafe_b64decode().
-    session["encryption_key"] = base64.urlsafe_b64encode(raw_key).decode()
+    key_b64: str = base64.urlsafe_b64encode(raw_key).decode()
+
+    if user.totp_enabled:
+        # Password verified, key derived — but TOTP must be checked before
+        # granting vault access. Store a pending state; AuthGuard grants
+        # access only on encryption_key, not pending_user_id.
+        session["pending_user_id"] = user.id
+        session["pending_encryption_key"] = key_b64
+        logger.info("User id=%d passed password check; awaiting TOTP.", user.id)
+        return True
+
+    # 2FA not enabled — complete the session immediately.
+    session["encryption_key"] = key_b64
     session["user_id"] = user.id
     logger.info("User id=%d logged in.", user.id)
+    return False
 
 
 def logout(session: dict) -> None:
@@ -175,3 +195,91 @@ def logout(session: dict) -> None:
     """
     session.clear()
     logger.info("Session cleared — user logged out.")
+
+
+def enable_2fa(
+    user_id: int,
+    secret: str,
+    confirmation_token: str,
+    raw_key: bytes,
+    db: Session,
+) -> list[str]:
+    """Activate TOTP 2FA for the user after confirming their authenticator is synced.
+
+    Verifies the first TOTP code before persisting anything — ensures the user
+    can actually produce valid codes before 2FA is locked in. On success the
+    secret is AES-GCM encrypted and stored, 8 recovery codes are generated and
+    hashed (Argon2id), and the plaintext codes are returned once to the caller.
+
+    Args:
+        user_id:            Primary key of the authenticated user.
+        secret:             Plaintext Base32 TOTP secret from the setup session.
+                            Never stored in plaintext — encrypted before saving.
+        confirmation_token: 6-digit code from the user's authenticator app,
+                            used to confirm the secret is correctly configured.
+        raw_key:            Raw 32-byte vault encryption key from the session,
+                            used to AES-GCM encrypt the secret at rest.
+        db:                 SQLAlchemy session.
+
+    Returns:
+        List of 8 plaintext recovery codes. Show to the user exactly once;
+        only Argon2id hashes are stored in the DB.
+
+    Raises:
+        HTTPException 422: confirmation_token is invalid (wrong code, expired).
+        HTTPException 404: No User row found for user_id (should not happen in
+                           normal flow since the session already has user_id).
+    """
+    if not verify_totp(secret, confirmation_token):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid confirmation code. Please try again.",
+        )
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    # Delete any existing recovery codes (handles the re-setup case where
+    # the user is cycling their 2FA configuration).
+    db.query(RecoveryCode).filter(RecoveryCode.user_id == user_id).delete()
+
+    user.totp_secret = encrypt_field_gcm(secret, raw_key)
+    user.totp_enabled = True
+    user.updated_at = utcnow()
+
+    codes = generate_recovery_codes()
+    for code in codes:
+        db.add(RecoveryCode(user_id=user_id, code_hash=hash_recovery_code(code)))
+
+    db.commit()
+    logger.info("2FA enabled for user id=%d; %d recovery codes issued.", user_id, len(codes))
+    return codes
+
+
+def disable_2fa(user_id: int, db: Session) -> None:
+    """Deactivate TOTP 2FA and delete all recovery codes for the user.
+
+    Args:
+        user_id: Primary key of the authenticated user.
+        db:      SQLAlchemy session.
+
+    Raises:
+        HTTPException 404: No User row found for user_id.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    user.totp_secret = None
+    user.totp_enabled = False
+    user.updated_at = utcnow()
+    db.query(RecoveryCode).filter(RecoveryCode.user_id == user_id).delete()
+    db.commit()
+    logger.info("2FA disabled for user id=%d.", user_id)
