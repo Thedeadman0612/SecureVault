@@ -209,7 +209,7 @@ pytest ≥80% coverage, Ruff zero violations, full type hints, structured loggin
 
 ### Phase 6 — DevSecOps + Cloud Deployment — Status: 🔴 Not Started
 
-Dockerfile, docker-compose, GitHub Actions CI, pip-audit, AWS EC2 t3.micro (nginx + certbot + systemd), EBS volume for DB, nightly S3 backup. See `spec.md §Phase 6`.
+Dockerfile, docker-compose, GitHub Actions CI, pip-audit, AWS EC2 t3.micro (nginx + certbot + systemd), EBS volume for DB, nightly S3 backup. Then codify the same infra in **Terraform** (`terraform/`) with remote state in S3 + DynamoDB lock. See `spec.md §Phase 6` for the full two-step approach.
 
 > ⚠️ **Rate limiter and reverse proxy:** When nginx is in front, `request.client.host` is the proxy's IP. Update `LoginRateLimitMiddleware` to read `X-Forwarded-For` only when `ENVIRONMENT=production`.
 
