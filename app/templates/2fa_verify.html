@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Two-Factor Authentication — SecureVault{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center px-4">
+  <div class="w-full max-w-sm">
+
+    <div class="text-center mb-8">
+      <div class="text-5xl mb-3">🔐</div>
+      <h1 class="text-2xl font-bold text-gray-900">Two-Factor Authentication</h1>
+      <p class="text-gray-500 text-sm mt-1">Enter the 6-digit code from your authenticator app</p>
+    </div>
+
+    {% if error %}
+    <div class="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/2fa/verify"
+          class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+
+      <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
+
+      <div>
+        <label for="token" class="block text-sm font-medium text-gray-700 mb-1">
+          Authenticator Code
+        </label>
+        <input
+          id="token"
+          name="token"
+          type="text"
+          inputmode="numeric"
+          pattern="[0-9]{6}"
+          maxlength="6"
+          required
+          autofocus
+          autocomplete="one-time-code"
+          placeholder="000000"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-center
+                 tracking-widest font-mono
+                 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+      </div>
+
+      <button
+        type="submit"
+        class="w-full py-2 px-4 bg-indigo-600 text-white text-sm font-medium rounded-lg
+               hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500
+               focus:ring-offset-2 transition-colors"
+      >
+        Verify
+      </button>
+
+    </form>
+
+    <p class="text-center text-sm text-gray-500 mt-4">
+      Lost access to your app?
+      <a href="/2fa/recovery" class="text-indigo-600 hover:underline">Use a recovery code</a>
+    </p>
+
+  </div>
+</div>
+{% endblock %}

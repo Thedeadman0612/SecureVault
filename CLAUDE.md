@@ -168,7 +168,7 @@ All security hardening files implemented and hardened through code review. See `
 
 ---
 
-### Phase 3 — TOTP Two-Factor Authentication — Status: 🟡 In Progress (Sub-task 2 of 3 complete)
+### Phase 3 — TOTP Two-Factor Authentication — Status: ✅ Complete
 
 > **Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
 > TOTP (RFC 6238) is the industry standard — supported by Google Authenticator, Authy, 1Password, Bitwarden, etc.
@@ -187,27 +187,11 @@ All security hardening files implemented and hardened through code review. See `
 | `app/routes/auth.py` | Added `GET/POST /2fa/setup`, `GET/POST /2fa/verify`, `GET/POST /2fa/recovery`, `POST /2fa/disable`; updated `POST /login` to redirect to `/2fa/verify` when `requires_totp=True`; QR code generated server-side via `qrcode[pil]` |
 | `app/middleware/auth_guard.py` | Exempted `/2fa/verify` and `/2fa/recovery` from encryption-key check so mid-login users can reach the TOTP prompt |
 
-#### ❌ Still To Implement
-
-New Python files that do not exist yet:
-
-| File | What's needed |
-|---|---|
-| `app/tests/test_totp.py` | Unit tests: secret generation format, URI format, TOTP verification (valid/invalid/expired), recovery code generation (length, uniqueness), recovery code hashing round-trip |
-
-New HTML templates that do not exist yet:
-
-| File | What's needed |
-|---|---|
-| `app/templates/2fa_setup.html` | QR code image (`<img src="data:image/png;base64,...">` — generated server-side with `qrcode[pil]`); manual secret entry fallback; recovery codes display (shown once — "save these now" warning); confirm-first-code form |
-| `app/templates/2fa_verify.html` | 6-digit TOTP code input; "Use recovery code" link |
-| `app/templates/2fa_recovery.html` | Recovery code text input; redirects back to TOTP verify on wrong code |
-
-#### 🔧 Existing files needing Phase 3 additions
-
-| File | Phase 3 additions needed |
-|---|---|
-| `app/tests/test_auth_routes.py` | Add 2FA integration tests: setup flow, TOTP verify blocks vault before code, recovery code invalidated after use, disable 2FA, login without 2FA still works |
+| `app/tests/test_totp.py` | 18 unit tests covering `generate_secret` format/randomness, `get_provisioning_uri` structure, `verify_totp` valid/invalid/wrong-secret, `generate_recovery_codes` count/length/uniqueness, `hash_recovery_code` Argon2id format, `verify_recovery_code` correct/wrong |
+| `app/templates/2fa_setup.html` | Three-state template: setup form with QR code + manual secret fallback + confirmation input; recovery codes display (shown once with save-now warning); optional disable button when 2FA already active |
+| `app/templates/2fa_verify.html` | 6-digit TOTP input form; "Use recovery code" link to `/2fa/recovery` |
+| `app/templates/2fa_recovery.html` | Recovery code text input form; "Use authenticator app" link back to `/2fa/verify` |
+| `app/tests/test_auth_routes.py` | 25 new 2FA integration tests across `TestLogin2FA`, `TestTotpVerify`, `TestRecoveryCodes`, `TestDisable2FA`; `_enable_2fa` helper with `generate_secret` mock; `client_2fa_enabled` and `client_2fa_pending` fixtures |
 
 > ⚠️ **TOTP secret storage:** The secret must be encrypted at rest — treat it like a vault credential. Use `encrypt_field_gcm(secret, encryption_key)` and store the ciphertext in `users.totp_secret`. Decrypt at login time the same way vault fields are decrypted. Never log the plaintext secret.
 >

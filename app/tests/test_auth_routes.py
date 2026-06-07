@@ -23,7 +23,9 @@ Covers:
 """
 
 import re
+from unittest.mock import patch
 
+import pyotp
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -35,6 +37,8 @@ from app.database.session import get_db
 from app.main import app
 from app.models.user import User  # noqa: F401 — registers users table with Base.metadata
 from app.models.vault_entry import VaultEntry  # noqa: F401 — registers vault_entries (FK dep)
+# RecoveryCode is imported transitively via app.main → routes.auth → services.auth_service,
+# which registers recovery_codes with Base.metadata so create_all() builds the table.
 
 
 # ---------------------------------------------------------------------------
@@ -506,3 +510,283 @@ class TestCSRFProtection:
         # The middleware must redirect, not forbid.
         assert response.status_code == 303
         assert response.headers.get("location") in ("/login", "http://testserver/login")
+
+
+# ---------------------------------------------------------------------------
+# 2FA helpers and fixtures
+# ---------------------------------------------------------------------------
+
+# Deterministic secret used across all 2FA tests.  Patching generate_secret
+# to return this value lets tests produce valid TOTP tokens on demand.
+_KNOWN_2FA_SECRET = "JBSWY3DPEHPK3PXP"
+
+
+def _enable_2fa(client: TestClient) -> list[str]:
+    """Enable 2FA on an already-authenticated client with _KNOWN_2FA_SECRET.
+
+    Returns the 8 plaintext recovery codes extracted from the setup page.
+    The caller is responsible for being logged in before calling this.
+    """
+    with patch("app.routes.auth.generate_secret", return_value=_KNOWN_2FA_SECRET):
+        resp = client.get("/2fa/setup")
+    assert resp.status_code == 200, f"GET /2fa/setup returned {resp.status_code}"
+    match = re.search(r'name="csrf_token"\s+value="([0-9a-f]{64})"', resp.text)
+    csrf = match.group(1) if match else ""
+    token_val = pyotp.TOTP(_KNOWN_2FA_SECRET).now()
+    resp = client.post("/2fa/setup", data={"token": token_val, "csrf_token": csrf})
+    assert resp.status_code == 200, f"POST /2fa/setup returned {resp.status_code}"
+    return re.findall(r'class="recovery-code[^"]*">([^<]+)<', resp.text)
+
+
+@pytest.fixture()
+def client_2fa_enabled(authenticated_client):
+    """Client with vault set up, logged in, and TOTP 2FA active."""
+    _enable_2fa(authenticated_client)
+    return authenticated_client
+
+
+@pytest.fixture()
+def client_2fa_pending(client_2fa_enabled):
+    """Client with 2FA enabled and in mid-login state (pending_user_id set,
+    encryption_key NOT yet in session — TOTP step still required)."""
+    csrf = _get_csrf_token(client_2fa_enabled, "/vault")
+    client_2fa_enabled.post("/logout", data={"csrf_token": csrf})
+    csrf = _get_csrf_token(client_2fa_enabled, "/login")
+    resp = client_2fa_enabled.post(
+        "/login", data={"password": _VALID_CREDENTIAL, "csrf_token": csrf}
+    )
+    assert resp.status_code == 303
+    assert "/2fa/verify" in resp.headers["location"]
+    return client_2fa_enabled
+
+
+# ---------------------------------------------------------------------------
+# POST /login — 2FA redirect behaviour
+# ---------------------------------------------------------------------------
+
+class TestLogin2FA:
+    def test_login_with_2fa_redirects_to_verify(self, client_2fa_enabled):
+        """When 2FA is enabled, POST /login must redirect to /2fa/verify (303),
+        not directly to /vault."""
+        csrf = _get_csrf_token(client_2fa_enabled, "/vault")
+        client_2fa_enabled.post("/logout", data={"csrf_token": csrf})
+        csrf = _get_csrf_token(client_2fa_enabled, "/login")
+        resp = client_2fa_enabled.post(
+            "/login", data={"password": _VALID_CREDENTIAL, "csrf_token": csrf}
+        )
+        assert resp.status_code == 303
+        assert "/2fa/verify" in resp.headers["location"]
+
+    def test_vault_inaccessible_with_pending_session(self, client_2fa_pending):
+        """With only pending_user_id in session (no encryption_key), AuthGuard
+        must block GET /vault and redirect to /login."""
+        resp = client_2fa_pending.get("/vault")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["location"]
+
+    def test_login_without_2fa_still_goes_to_vault(self, client_with_vault):
+        """Users who have not enabled 2FA must still be redirected to /vault
+        after a correct password — the 2FA changes must not regress this."""
+        token = _get_csrf_token(client_with_vault, "/login")
+        resp = client_with_vault.post(
+            "/login", data={"password": _VALID_CREDENTIAL, "csrf_token": token}
+        )
+        assert resp.status_code == 303
+        assert "/vault" in resp.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# GET + POST /2fa/verify
+# ---------------------------------------------------------------------------
+
+class TestTotpVerify:
+    def test_get_verify_renders_form(self, client_2fa_pending):
+        """GET /2fa/verify must return 200 when pending_user_id is in session."""
+        resp = client_2fa_pending.get("/2fa/verify")
+        assert resp.status_code == 200
+        assert 'name="token"' in resp.text
+
+    def test_get_verify_without_pending_redirects_to_login(self, client):
+        """GET /2fa/verify with no pending session must redirect to /login."""
+        resp = client.get("/2fa/verify")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["location"]
+
+    def test_valid_code_promotes_session_and_redirects_to_vault(self, client_2fa_pending):
+        """POST /2fa/verify with a correct TOTP code must set encryption_key in
+        session and redirect to /vault with 303."""
+        token_val = pyotp.TOTP(_KNOWN_2FA_SECRET).now()
+        csrf = _get_csrf_token(client_2fa_pending, "/2fa/verify")
+        resp = client_2fa_pending.post(
+            "/2fa/verify", data={"token": token_val, "csrf_token": csrf}
+        )
+        assert resp.status_code == 303
+        assert "/vault" in resp.headers["location"]
+
+    def test_vault_accessible_after_totp_success(self, client_2fa_pending):
+        """After successful TOTP verification, GET /vault must return 200."""
+        token_val = pyotp.TOTP(_KNOWN_2FA_SECRET).now()
+        csrf = _get_csrf_token(client_2fa_pending, "/2fa/verify")
+        client_2fa_pending.post(
+            "/2fa/verify", data={"token": token_val, "csrf_token": csrf}
+        )
+        assert client_2fa_pending.get("/vault").status_code == 200
+
+    def test_invalid_code_returns_401(self, client_2fa_pending):
+        """POST /2fa/verify with a wrong code must return 401."""
+        csrf = _get_csrf_token(client_2fa_pending, "/2fa/verify")
+        resp = client_2fa_pending.post(
+            "/2fa/verify", data={"token": "000000", "csrf_token": csrf}
+        )
+        assert resp.status_code == 401
+
+    def test_invalid_code_shows_error_message(self, client_2fa_pending):
+        csrf = _get_csrf_token(client_2fa_pending, "/2fa/verify")
+        resp = client_2fa_pending.post(
+            "/2fa/verify", data={"token": "000000", "csrf_token": csrf}
+        )
+        assert "invalid code" in resp.text.lower()
+
+    def test_vault_still_blocked_after_failed_totp(self, client_2fa_pending):
+        """A failed TOTP attempt must not grant vault access."""
+        csrf = _get_csrf_token(client_2fa_pending, "/2fa/verify")
+        client_2fa_pending.post(
+            "/2fa/verify", data={"token": "000000", "csrf_token": csrf}
+        )
+        assert client_2fa_pending.get("/vault").status_code == 302
+
+    def test_max_attempts_wipes_session_and_redirects(self, client_2fa_pending):
+        """After 5 consecutive wrong codes, the pending session is cleared and
+        the user is redirected to /login to restart from the password step."""
+        csrf = _get_csrf_token(client_2fa_pending, "/2fa/verify")
+        resp = None
+        for _ in range(5):
+            resp = client_2fa_pending.post(
+                "/2fa/verify", data={"token": "000000", "csrf_token": csrf}
+            )
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["location"]
+        # Vault must also be blocked after the session wipe.
+        assert client_2fa_pending.get("/vault").status_code == 302
+
+
+# ---------------------------------------------------------------------------
+# GET + POST /2fa/recovery
+# ---------------------------------------------------------------------------
+
+class TestRecoveryCodes:
+    def test_get_recovery_renders_form(self, client_2fa_pending):
+        resp = client_2fa_pending.get("/2fa/recovery")
+        assert resp.status_code == 200
+        assert 'name="recovery_code"' in resp.text
+
+    def test_get_recovery_without_pending_redirects_to_login(self, client):
+        resp = client.get("/2fa/recovery")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["location"]
+
+    def test_valid_recovery_code_grants_access(self, authenticated_client):
+        """A valid, unused recovery code used at /2fa/recovery must promote the
+        session and redirect to /vault."""
+        codes = _enable_2fa(authenticated_client)
+        assert codes, "No recovery codes parsed from setup page"
+
+        csrf = _get_csrf_token(authenticated_client, "/vault")
+        authenticated_client.post("/logout", data={"csrf_token": csrf})
+        csrf = _get_csrf_token(authenticated_client, "/login")
+        authenticated_client.post(
+            "/login", data={"password": _VALID_CREDENTIAL, "csrf_token": csrf}
+        )
+
+        csrf = _get_csrf_token(authenticated_client, "/2fa/recovery")
+        resp = authenticated_client.post(
+            "/2fa/recovery", data={"recovery_code": codes[0], "csrf_token": csrf}
+        )
+        assert resp.status_code == 303
+        assert "/vault" in resp.headers["location"]
+
+    def test_vault_accessible_after_recovery_code(self, authenticated_client):
+        """GET /vault after a successful recovery-code login must return 200."""
+        codes = _enable_2fa(authenticated_client)
+
+        csrf = _get_csrf_token(authenticated_client, "/vault")
+        authenticated_client.post("/logout", data={"csrf_token": csrf})
+        csrf = _get_csrf_token(authenticated_client, "/login")
+        authenticated_client.post(
+            "/login", data={"password": _VALID_CREDENTIAL, "csrf_token": csrf}
+        )
+        csrf = _get_csrf_token(authenticated_client, "/2fa/recovery")
+        authenticated_client.post(
+            "/2fa/recovery", data={"recovery_code": codes[0], "csrf_token": csrf}
+        )
+        assert authenticated_client.get("/vault").status_code == 200
+
+    def test_recovery_code_is_single_use(self, authenticated_client):
+        """The same recovery code must be rejected on a second attempt."""
+        codes = _enable_2fa(authenticated_client)
+
+        def _enter_pending():
+            csrf = _get_csrf_token(authenticated_client, "/vault")
+            authenticated_client.post("/logout", data={"csrf_token": csrf})
+            csrf = _get_csrf_token(authenticated_client, "/login")
+            authenticated_client.post(
+                "/login", data={"password": _VALID_CREDENTIAL, "csrf_token": csrf}
+            )
+
+        # First use: must succeed.
+        _enter_pending()
+        csrf = _get_csrf_token(authenticated_client, "/2fa/recovery")
+        resp = authenticated_client.post(
+            "/2fa/recovery", data={"recovery_code": codes[0], "csrf_token": csrf}
+        )
+        assert resp.status_code == 303
+
+        # Second use of the same code: must be rejected.
+        _enter_pending()
+        csrf = _get_csrf_token(authenticated_client, "/2fa/recovery")
+        resp = authenticated_client.post(
+            "/2fa/recovery", data={"recovery_code": codes[0], "csrf_token": csrf}
+        )
+        assert resp.status_code == 401
+
+    def test_invalid_recovery_code_returns_401(self, client_2fa_pending):
+        csrf = _get_csrf_token(client_2fa_pending, "/2fa/recovery")
+        resp = client_2fa_pending.post(
+            "/2fa/recovery", data={"recovery_code": "BADCODE1", "csrf_token": csrf}
+        )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /2fa/disable
+# ---------------------------------------------------------------------------
+
+class TestDisable2FA:
+    def test_disable_redirects_to_vault(self, client_2fa_enabled):
+        csrf = _get_csrf_token(client_2fa_enabled, "/vault")
+        resp = client_2fa_enabled.post("/2fa/disable", data={"csrf_token": csrf})
+        assert resp.status_code == 303
+        assert "/vault" in resp.headers["location"]
+
+    def test_login_goes_directly_to_vault_after_disable(self, client_2fa_enabled):
+        """After disabling 2FA, POST /login must redirect to /vault directly
+        (no TOTP step required)."""
+        csrf = _get_csrf_token(client_2fa_enabled, "/vault")
+        client_2fa_enabled.post("/2fa/disable", data={"csrf_token": csrf})
+
+        csrf = _get_csrf_token(client_2fa_enabled, "/vault")
+        client_2fa_enabled.post("/logout", data={"csrf_token": csrf})
+        csrf = _get_csrf_token(client_2fa_enabled, "/login")
+        resp = client_2fa_enabled.post(
+            "/login", data={"password": _VALID_CREDENTIAL, "csrf_token": csrf}
+        )
+        assert resp.status_code == 303
+        assert "/vault" in resp.headers["location"]
+
+    def test_setup_page_accessible_after_disable(self, client_2fa_enabled):
+        """GET /2fa/setup must return 200 after 2FA is disabled (authenticated
+        user can start setup again at any time)."""
+        csrf = _get_csrf_token(client_2fa_enabled, "/vault")
+        client_2fa_enabled.post("/2fa/disable", data={"csrf_token": csrf})
+        resp = client_2fa_enabled.get("/2fa/setup")
+        assert resp.status_code == 200
