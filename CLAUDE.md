@@ -103,8 +103,9 @@ This app decrypts vault entries on the server and renders plaintext HTML to the 
 | `app/services/` | Business logic: auth service, vault CRUD service |
 | `app/services/ai_service.py` | Anthropic Claude API client; metadata-only AI features; metadata extraction helpers — never accepts raw password/username as a parameter (Phase 7) |
 | `app/security/` | Encryption service (Fernet + AES-256-GCM), key derivation, password hashing |
+| `app/security/totp.py` | TOTP secret generation, provisioning URI, token verification, recovery code generation/hashing (Phase 3) |
 | `app/security/tokens.py` | JWT access + refresh token generation and verification via `PyJWT` (Phase 10) |
-| `app/models/` | SQLAlchemy ORM models (`User`, `VaultEntry`) |
+| `app/models/` | SQLAlchemy ORM models (`User`, `VaultEntry`, `RecoveryCode`) |
 | `app/schemas/` | Pydantic request/response schemas |
 | `app/database/` | SQLAlchemy engine, session factory, `get_db` dependency; WAL mode pragma hook |
 | `app/middleware/auth_guard.py` | Redirect unauthenticated requests to `/login`; exempt `/login`, `/setup`, `/static/*`, `/2fa/*` |
@@ -167,27 +168,48 @@ All security hardening files implemented and hardened through code review. See `
 
 ---
 
-### Phase 3 — TOTP Two-Factor Authentication — Status: 🔴 Not Started
+### Phase 3 — TOTP Two-Factor Authentication — Status: 🟡 In Progress (Sub-task 1 of 3 complete)
 
 > **Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
 > TOTP (RFC 6238) is the industry standard — supported by Google Authenticator, Authy, 1Password, Bitwarden, etc.
 > 2FA is optional per-user: users who skip setup continue using password-only login.
 
-| File / Area | What's needed |
+#### ✅ Completed
+
+| File / Area | What was implemented |
 |---|---|
-| `app/models/user.py` | Add `totp_secret: Mapped[str \| None]` (NULL = 2FA disabled; stored AES-GCM encrypted — same key as vault), `totp_enabled: Mapped[bool]` (default False) |
-| `app/models/recovery_code.py` | `RecoveryCode` ORM model — `user_id` FK, `code_hash` (Argon2id hash of 8-char alphanumeric code), `used_at` timestamp (NULL = unused); 8 codes generated at 2FA setup, each usable exactly once |
-| `app/migrations/` | New Alembic migration for `totp_secret`, `totp_enabled` columns on `users` and new `recovery_codes` table |
-| `app/security/totp.py` | New module — `generate_secret() -> str` (`pyotp.random_base32()`); `get_provisioning_uri(secret, issuer) -> str` (for QR code); `verify_totp(secret, token, valid_window=1) -> bool`; `generate_recovery_codes() -> list[str]` (8 × 8-char codes, `secrets.token_urlsafe`); `hash_recovery_code(code) -> str` (Argon2id); `verify_recovery_code(code, hash) -> bool` |
-| `app/services/auth_service.py` | `enable_2fa(user_id, secret, confirmation_token, db) -> list[str]` — verifies the first TOTP code before activating, returns recovery codes; `disable_2fa(user_id, db)`; extend `login()` to return a `requires_totp=True` flag when 2FA is enabled (so the route redirects to the TOTP prompt instead of directly to /vault) |
-| `app/routes/auth.py` | Add `GET /2fa/setup` + `POST /2fa/setup` (render QR code, accept confirmation code, return recovery codes); `GET /2fa/verify` + `POST /2fa/verify` (TOTP prompt mid-login); `POST /2fa/disable`; update `POST /login` flow to redirect to `/2fa/verify` when `requires_totp=True`; use `session["pending_user_id"]` for the mid-login state so AuthGuard still blocks /vault until 2FA is passed |
+| `requirements.txt` | Added `pyotp>=2.9` and `qrcode[pil]>=7.4` |
+| `app/models/user.py` | Added `totp_secret: Mapped[str \| None]` (NULL = 2FA disabled; AES-GCM encrypted) and `totp_enabled: Mapped[bool]` (default False); added `recovery_codes` relationship |
+| `app/models/recovery_code.py` | New `RecoveryCode` ORM model — `user_id` FK (CASCADE), `code_hash` (Argon2id), `used_at` (NULL = unused) |
+| `app/migrations/versions/d4e5f6a7b8c9_add_totp_2fa.py` | Alembic migration adding `totp_secret`, `totp_enabled` to `users` and creating `recovery_codes` table with index |
+| `app/security/totp.py` | New module: `generate_secret()`, `get_provisioning_uri()`, `verify_totp()`, `generate_recovery_codes()` (8 × 8-char codes via `secrets.token_urlsafe`), `hash_recovery_code()` (Argon2id), `verify_recovery_code()` |
+
+#### ❌ Still To Implement
+
+New Python files that do not exist yet:
+
+| File | What's needed |
+|---|---|
+| `app/tests/test_totp.py` | Unit tests: secret generation format, URI format, TOTP verification (valid/invalid/expired), recovery code generation (length, uniqueness), recovery code hashing round-trip |
+
+New HTML templates that do not exist yet:
+
+| File | What's needed |
+|---|---|
 | `app/templates/2fa_setup.html` | QR code image (`<img src="data:image/png;base64,...">` — generated server-side with `qrcode[pil]`); manual secret entry fallback; recovery codes display (shown once — "save these now" warning); confirm-first-code form |
 | `app/templates/2fa_verify.html` | 6-digit TOTP code input; "Use recovery code" link |
 | `app/templates/2fa_recovery.html` | Recovery code text input; redirects back to TOTP verify on wrong code |
-| `app/middleware/auth_guard.py` | Exempt `/2fa/verify` and `/2fa/recovery` from the encryption-key check (user is mid-login: password passed, TOTP not yet); add `/2fa/*` to setup exempt paths |
-| `requirements.txt` | Add `pyotp>=2.9` and `qrcode[pil]>=7.4` |
-| `app/tests/test_totp.py` | Unit tests: secret generation format, URI format, TOTP verification (valid/invalid/expired), recovery code generation (length, uniqueness), recovery code hashing round-trip |
-| `app/tests/test_auth_routes.py` | Integration tests: 2FA setup flow, TOTP verify blocks vault before code, recovery code invalidated after use, disable 2FA, login without 2FA still works |
+
+#### 🔧 Existing files needing Phase 3 extensions
+
+These files already have working Phase 1/2 code — the additions below are not yet done:
+
+| File | Phase 3 additions needed |
+|---|---|
+| `app/services/auth_service.py` | `enable_2fa(user_id, secret, confirmation_token, db) -> list[str]` — verifies the first TOTP code before activating, returns recovery codes; `disable_2fa(user_id, db)`; extend `login()` to return a `requires_totp=True` flag when 2FA is enabled |
+| `app/routes/auth.py` | Add `GET /2fa/setup` + `POST /2fa/setup`; `GET /2fa/verify` + `POST /2fa/verify`; `POST /2fa/disable`; update `POST /login` to redirect to `/2fa/verify` when `requires_totp=True`; use `session["pending_user_id"]` for mid-login state |
+| `app/middleware/auth_guard.py` | Exempt `/2fa/verify` and `/2fa/recovery` from the encryption-key check; add `/2fa/*` to setup exempt paths |
+| `app/tests/test_auth_routes.py` | Add 2FA integration tests: setup flow, TOTP verify blocks vault before code, recovery code invalidated after use, disable 2FA, login without 2FA still works |
 
 > ⚠️ **TOTP secret storage:** The secret must be encrypted at rest — treat it like a vault credential. Use `encrypt_field_gcm(secret, encryption_key)` and store the ciphertext in `users.totp_secret`. Decrypt at login time the same way vault fields are decrypted. Never log the plaintext secret.
 >
