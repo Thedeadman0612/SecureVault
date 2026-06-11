@@ -125,7 +125,10 @@ async def get_vault(
     error: str | None = None
     categories: list[str] = []
     try:
-        entries = vault_service.get_entries(user_id, raw_key, db, q=q, category=category)
+        # Always fetch all entries — client-side JS in vault_search.js does
+        # the live filtering. q and active_category are passed to the template
+        # only to pre-fill the search inputs on page load.
+        entries = vault_service.get_entries(user_id, raw_key, db)
         categories = vault_service.get_categories(user_id, db)
     except HTTPException as exc:
         entries = []

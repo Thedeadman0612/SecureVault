@@ -48,29 +48,39 @@
   </div>
   {% endif %}
 
-  {# Page heading + entry count #}
+  {# Page heading + dynamic entry count (updated by vault_search.js) #}
   <div class="flex items-center justify-between mb-4">
     <h1 class="text-xl font-semibold text-gray-900">
       Vault
       {% if entries %}
-      <span class="ml-2 text-sm font-normal text-gray-400">
+      <span id="vault-entry-count" class="ml-2 text-sm font-normal text-gray-400">
         ({{ entries | length }} {{ 'entry' if entries | length == 1 else 'entries' }})
       </span>
       {% endif %}
     </h1>
   </div>
 
-  {# Search + filter bar — GET form, no CSRF required #}
-  <form method="GET" action="/vault" class="mb-6 flex flex-wrap gap-2">
+  {#
+    Search + filter bar.
+    - id="vault-search-form"     → vault_search.js intercepts submit (no reload)
+    - id="vault-search-q"        → live input handler
+    - id="vault-search-category" → instant filter on change
+    - id="vault-clear-btn"       → shown/hidden by JS; resets both inputs
+    q and active_category pre-fill inputs when landing from a bookmarked URL.
+  #}
+  <form id="vault-search-form" method="GET" action="/vault" class="mb-6 flex flex-wrap gap-2">
     <input
+      id="vault-search-q"
       type="search"
       name="q"
       value="{{ q }}"
       placeholder="Search title or website…"
+      autocomplete="off"
       class="flex-1 min-w-[160px] px-3 py-2 border border-gray-300 rounded-lg text-sm
              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
     >
     <select
+      id="vault-search-category"
       name="category"
       class="px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700
              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -80,28 +90,42 @@
       <option value="{{ cat }}" {% if active_category == cat %}selected{% endif %}>{{ cat }}</option>
       {% endfor %}
     </select>
+    {# Clear button: always rendered; JS shows it when a filter is active #}
     <button
-      type="submit"
-      class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg
-             hover:bg-indigo-700 transition-colors"
-    >
-      Search
-    </button>
-    {% if q or active_category %}
-    <a
-      href="/vault"
-      class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+      type="button"
+      id="vault-clear-btn"
+      class="hidden px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
              hover:bg-gray-200 transition-colors"
     >
       Clear
-    </a>
-    {% endif %}
+    </button>
   </form>
 
   {% if entries %}
 
-  {# Entry table #}
-  <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+  {#
+    No-results block: hidden on page load; vault_search.js reveals it when the
+    live filter reduces visible rows to zero while a filter is active.
+  #}
+  <div
+    id="vault-empty-filtered"
+    class="hidden bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-16 text-center"
+  >
+    <div class="text-5xl mb-4">🔍</div>
+    <h2 class="text-lg font-medium text-gray-900 mb-1">No entries found</h2>
+    <p class="text-sm text-gray-500 mb-6">No entries match your search.</p>
+    <button
+      type="button"
+      id="vault-clear-btn-empty"
+      class="inline-block px-5 py-2 text-sm font-medium text-gray-600 bg-gray-100
+             rounded-lg hover:bg-gray-200 transition-colors"
+    >
+      Clear filter
+    </button>
+  </div>
+
+  {# Entry table — vault_search.js hides this div when visible row count is 0 #}
+  <div id="vault-entries-table" class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
     <table class="w-full text-sm">
       <thead>
         <tr class="bg-gray-50 border-b border-gray-200">
@@ -119,7 +143,19 @@
       </thead>
       <tbody class="divide-y divide-gray-100">
         {% for entry in entries %}
-        <tr class="hover:bg-gray-50 transition-colors">
+        {#
+          data-vault-entry  → selector for vault_search.js to find all rows
+          data-title        → lowercase title for case-insensitive match
+          data-website      → lowercase website for case-insensitive match
+          data-category     → exact category value for dropdown filter
+        #}
+        <tr
+          data-vault-entry
+          data-title="{{ entry.title | lower }}"
+          data-website="{{ (entry.website or '') | lower }}"
+          data-category="{{ entry.category or '' }}"
+          class="hover:bg-gray-50 transition-colors"
+        >
           <td class="px-4 py-3 font-medium text-gray-900">{{ entry.title | truncate_str }}</td>
           <td class="px-4 py-3 text-gray-500 truncate max-w-0">
             {{ entry.website or '—' }}
@@ -147,27 +183,9 @@
     </table>
   </div>
 
-  {% elif q or active_category %}
-
-  {# No results for active filter #}
-  <div class="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-16 text-center">
-    <div class="text-5xl mb-4">🔍</div>
-    <h2 class="text-lg font-medium text-gray-900 mb-1">No entries found</h2>
-    <p class="text-sm text-gray-500 mb-6">
-      No entries match your search{% if q %} "<strong>{{ q }}</strong>"{% endif %}{% if active_category %} in <strong>{{ active_category }}</strong>{% endif %}.
-    </p>
-    <a
-      href="/vault"
-      class="inline-block px-5 py-2 text-sm font-medium text-gray-600 bg-gray-100
-             rounded-lg hover:bg-gray-200 transition-colors"
-    >
-      Clear filter
-    </a>
-  </div>
-
   {% else %}
 
-  {# Vault is empty #}
+  {# Vault is truly empty — no entries exist at all #}
   <div class="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-16 text-center">
     <div class="text-5xl mb-4">🗝</div>
     <h2 class="text-lg font-medium text-gray-900 mb-1">Your vault is empty</h2>
@@ -184,4 +202,8 @@
   {% endif %}
 
 </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/vault_search.js"></script>
 {% endblock %}

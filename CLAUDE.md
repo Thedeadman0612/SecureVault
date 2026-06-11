@@ -206,10 +206,11 @@ All security hardening files implemented and hardened through code review. See `
 
 | File / Area | What was implemented |
 |---|---|
-| `app/routes/vault.py` | `get_vault()` accepts `q` and `category` query params; passes them to the service and back to the template as `q`, `active_category`, `categories` |
-| `app/services/vault_service.py` | `get_entries()` extended with optional `q` (title/website `ilike` OR) and `category` (exact match) filters; new `get_categories()` returns sorted distinct categories for the dropdown |
-| `app/templates/vault.html` | Search bar (`name="q"`) + category `<select>` populated from `categories`; active filter pre-filled; "Clear" link when filter active; "No entries found" empty state vs. "vault is empty" state |
+| `app/routes/vault.py` | `get_vault()` accepts `q` and `category` query params for form pre-fill; always fetches all entries (client-side JS handles filtering); passes `q`, `active_category`, `categories` to template |
+| `app/services/vault_service.py` | `get_entries()` extended with optional `q` (title/website `ilike` OR) and `category` (exact match) filters (used by tests/future callers); new `get_categories()` returns sorted distinct categories for the dropdown |
+| `app/templates/vault.html` | Search input (`id="vault-search-q"`) + category `<select>` (`id="vault-search-category"`); `data-vault-entry`/`data-title`/`data-website`/`data-category` on each `<tr>` for JS filtering; "No entries found" block (`id="vault-empty-filtered"`, hidden by default); "vault is empty" state; dynamic count label |
 | `app/templates/entry_form.html` | "Generate password" button below the password field; strength indicator bar + label (`hidden` until input); password generator modal (`id="password-generator-modal"`) with length slider (8–64, default 16), uppercase/numbers/symbols checkboxes, Regenerate + Use Password buttons |
+| `app/static/js/vault_search.js` | New file: live client-side filtering as user types (debounced 150 ms); category select filters instantly; form submit intercepted (no page reload); URL synced via `history.replaceState`; Clear button shown/hidden dynamically; "No entries found" block toggled when filter matches nothing |
 | `app/static/js/entry_form.js` | Real-time password strength indicator (5 levels: Very Weak → Very Strong) driven by length + character-set checks; fires on `input` event and pre-fills in edit mode |
 | `app/static/js/password_generator.js` | New file: `generatePassword()` uses `crypto.getRandomValues` + Fisher-Yates shuffle; modal open/close (button, backdrop click, Escape key); "Use Password" fills `form-password` and fires `input` event so strength updates |
 
