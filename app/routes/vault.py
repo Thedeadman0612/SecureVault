@@ -37,7 +37,7 @@ ERROR HANDLING:
 import base64
 import logging
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -105,11 +105,17 @@ def _session_context(request: Request) -> tuple[bytes, int] | RedirectResponse:
 # ---------------------------------------------------------------------------
 
 @router.get(_VAULT_URL, response_class=HTMLResponse)
-async def get_vault(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    """Render the vault dashboard with all decrypted entries.
+async def get_vault(
+    request: Request,
+    q: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Render the vault dashboard with filtered, decrypted entries.
 
-    Passes a (possibly empty) list of VaultEntryResponse objects to the
-    template under the key `entries`.
+    Accepts optional `q` (title/website text search) and `category` (exact
+    match) query parameters. Both filters operate on plaintext columns only.
+    Passes `entries`, `categories`, `q`, and `active_category` to the template.
     """
     ctx = _session_context(request)
     if isinstance(ctx, RedirectResponse):
@@ -117,19 +123,13 @@ async def get_vault(request: Request, db: Session = Depends(get_db)) -> HTMLResp
     raw_key, user_id = ctx
 
     error: str | None = None
+    categories: list[str] = []
     try:
-        entries = vault_service.get_entries(user_id, raw_key, db)
+        entries = vault_service.get_entries(user_id, raw_key, db, q=q, category=category)
+        categories = vault_service.get_categories(user_id, db)
     except HTTPException as exc:
-        # A 500 here means decryption failed for one or more entries —
-        # wrong key in session or tampered ciphertext. Show the error
-        # prominently so the user knows their data is not simply gone.
-        # Any other unexpected HTTPException is also surfaced rather than
-        # silently swallowed.
         entries = []
         error = exc.detail
-        # logger.exception() captures the full traceback automatically —
-        # useful for pinpointing which entry/field caused the decryption
-        # failure even though the HTTPException itself is expected.
         logger.exception(
             "Failed to load vault entries for user id=%d: %s",
             user_id, exc.detail,
@@ -137,7 +137,13 @@ async def get_vault(request: Request, db: Session = Depends(get_db)) -> HTMLResp
 
     return templates.TemplateResponse(
         request, _VAULT_TEMPLATE,
-        {"entries": entries, "error": error},
+        {
+            "entries": entries,
+            "error": error,
+            "q": q or "",
+            "active_category": category or "",
+            "categories": categories,
+        },
     )
 
 
