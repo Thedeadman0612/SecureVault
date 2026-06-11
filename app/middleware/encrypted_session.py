@@ -227,14 +227,25 @@ class EncryptedSessionMiddleware:
             decrypted = self._fernet.decrypt(raw.encode("utf-8"), ttl=self._max_age)
             return json.loads(decrypted)
         except InvalidToken:
-            # Covers: tampered ciphertext, HMAC failure, expired TTL,
-            # key mismatch after SECRET_KEY rotation.
-            logger.warning(
-                "Session cookie rejected (tampered, expired, or key-rotated) "
-                "— starting fresh session."
-            )
+            # Distinguish TTL expiry from tampering/key-rotation by attempting
+            # a decode with no TTL constraint. If that succeeds the cookie is
+            # structurally valid but simply too old — unambiguous inactivity
+            # expiry. If it still fails the cookie is tampered or was issued
+            # under a different SECRET_KEY.
+            try:
+                self._fernet.decrypt(raw.encode("utf-8"))
+                # Decodes fine without TTL → expired (not tampered).
+                logger.info(
+                    "Session cookie expired (inactivity TTL=%ds exceeded) "
+                    "— starting fresh session.", self._max_age
+                )
+            except InvalidToken:
+                logger.warning(
+                    "Session cookie rejected (tampered or key-rotated) "
+                    "— starting fresh session."
+                )
             return {}
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        except ValueError:  # covers json.JSONDecodeError and UnicodeDecodeError (both ⊂ ValueError)
             # Should not happen if we always encrypt our own JSON, but
             # handle defensively in case of a rare encoding edge case.
             logger.warning(

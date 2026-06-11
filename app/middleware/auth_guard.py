@@ -47,6 +47,7 @@ _EXEMPT_EXACT: frozenset[str] = frozenset({
     "/setup",
     "/2fa/verify",
     "/2fa/recovery",
+    "/auth/timeout-notify",  # JS inactivity-timer notification; read-only, no state change
 })
 _EXEMPT_PREFIXES: tuple[str, ...] = ("/static/",)
 
@@ -75,8 +76,26 @@ class AuthGuard(BaseHTTPMiddleware):
 
         # For all other paths, require an active session.
         if not request.session.get("encryption_key"):
-            logger.debug(
-                "Unauthenticated request to %s — redirecting to /login.", path
+            # Classify why the session is absent — aids debugging in logs.
+            session_keys = set(request.session.keys())
+            user_id = request.session.get("user_id")
+
+            if not session_keys or session_keys <= {"csrf_token"}:
+                # Cookie was absent or expired at the Fernet layer — fresh visit
+                # or the inactivity TTL elapsed between requests.
+                cause = "session_expired_or_no_cookie"
+            elif request.session.get("pending_user_id"):
+                # Mid-login TOTP state reached a non-exempt route — misconfigured
+                # exempt list or direct URL navigation during 2FA step-up.
+                cause = "pending_totp"
+                user_id = request.session.get("pending_user_id")
+            else:
+                # Session exists with unexpected keys but no encryption_key.
+                cause = "session_missing_key"
+
+            logger.info(
+                "Auth guard: access denied — method=%s path=%s cause=%s user_id=%s",
+                request.method, path, cause, user_id,
             )
             return RedirectResponse(url=_LOGIN_URL, status_code=302)
 

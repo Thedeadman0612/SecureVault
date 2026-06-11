@@ -214,6 +214,15 @@ All security hardening files implemented and hardened through code review. See `
 | `app/static/js/entry_form.js` | Real-time password strength indicator (5 levels: Very Weak → Very Strong) driven by length + character-set checks; fires on `input` event and pre-fills in edit mode |
 | `app/static/js/password_generator.js` | New file: `generatePassword()` uses `crypto.getRandomValues` + Fisher-Yates shuffle; modal open/close (button, backdrop click, Escape key); "Use Password" fills `form-password` and fires `input` event so strength updates |
 
+#### ✅ Completed (logging enhancements — cross-cutting)
+
+| File / Area | What was implemented |
+|---|---|
+| `app/middleware/auth_guard.py` | Upgraded from `DEBUG` to `INFO`; classifies redirect cause as `session_expired_or_no_cookie`, `pending_totp`, or `session_missing_key`; includes `user_id` and HTTP method in log line; added `/auth/timeout-notify` to exempt paths |
+| `app/middleware/encrypted_session.py` | Distinguishes Fernet TTL expiry (logs `INFO`) from cookie tampering/key-rotation (logs `WARNING`) by attempting a TTL-free decode; fixed redundant `ValueError` subclasses in except clause |
+| `app/routes/auth.py` | Added `GET /auth/timeout-notify` — exempt endpoint called by JS before inactivity redirect; reads `user_id` from the still-live session and logs `INFO "Client-side inactivity timeout fired"` |
+| `app/static/js/session_timeout.js` | `logout()` now fires `fetch('/auth/timeout-notify', { keepalive: true })` before navigating so the timeout is recorded server-side with the user_id |
+
 #### ❌ Still To Implement
 
 | Sub-task | Features |
