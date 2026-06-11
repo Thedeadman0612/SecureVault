@@ -670,7 +670,13 @@ Requirements:
 
 ### Phase 6 — DevSecOps + Cloud Deployment
 
-**Goal:** Learn deployment, DevSecOps concepts, and real cloud infrastructure on AWS.
+**Goal:** Learn deployment, DevSecOps concepts, and real cloud infrastructure on AWS — including both hands-on manual setup and Infrastructure as Code (Terraform).
+
+> **Two-step deployment approach:** First, set up the infrastructure manually via the AWS Console and CLI. This forces a deep understanding of every component — you configure nginx, TLS, and systemd yourself. Second, codify that same infrastructure in Terraform so it is reproducible, version-controlled, and portfolio-ready. Writing Terraform after manual setup is much easier because you already know exactly what resources exist.
+
+---
+
+#### Step 1 — CI/CD Pipeline and Containerisation
 
 Requirements:
 - Dockerfile (multi-stage build; non-root user; `python:3.13-slim` base image)
@@ -679,17 +685,54 @@ Requirements:
 - dependency scanning (`pip-audit` — zero known critical CVEs required)
 - secret scanning (Trufflehog / GitHub secret scanning — no secrets committed)
 - container hardening (non-root user, read-only filesystem where possible)
-- **Cloud deployment on AWS EC2 t3.micro** (free tier 12 months):
-  - Ubuntu 24.04 LTS; Elastic IP; security group: ports 22/80/443 only
-  - nginx reverse proxy (`proxy_pass http://127.0.0.1:8000`; HTTP→HTTPS redirect)
-  - TLS via certbot / Let's Encrypt (auto-renewal via cron)
-  - systemd service (`Restart=always`; environment variables from `/etc/securevault/env`, not the unit file)
-  - SQLite database on a separate EBS volume — survives instance replacement
-  - GitHub Actions SSH deploy workflow: push → SSH → git pull → systemctl restart
+
+---
+
+#### Step 2 — Manual AWS Deployment
+
+Set up the live infrastructure by hand via the AWS Console / CLI. Goal: understand every layer before abstracting it.
+
+Requirements:
+- **AWS EC2 t3.micro** (free tier 12 months); Ubuntu 24.04 LTS; Elastic IP; security group: ports 22/80/443 only
+- nginx reverse proxy (`proxy_pass http://127.0.0.1:8000`; HTTP→HTTPS redirect)
+- TLS via certbot / Let's Encrypt (auto-renewal via cron)
+- systemd service (`Restart=always`; environment variables from `/etc/securevault/env`, not the unit file)
+- SQLite database on a separate EBS volume — survives instance replacement
+- GitHub Actions SSH deploy workflow: push → SSH → git pull → systemctl restart
+- `nginx/securevault.conf` — nginx config committed to the repo
+- `systemd/securevault.service` — systemd unit file committed to the repo
+- `scripts/backup.sh` — nightly SQLite backup to AWS S3 via cron; retention policy via S3 Lifecycle rules
+- `docs/deployment.md` — step-by-step guide covering EC2 launch, nginx, certbot, systemd, EBS volume, GitHub Actions deploy, server hardening (UFW, fail2ban, non-root app user)
+- `GET /health` — health check endpoint returning `{"status": "ok", "db": "ok"}`; exempted from `AuthGuard`
 
 > **Rate limiter note:** When nginx is in front, `request.client.host` is nginx's loopback IP. Update `LoginRateLimitMiddleware` to read `X-Forwarded-For` when `ENVIRONMENT=production`. Never trust `X-Forwarded-For` in dev.
 
-**Deliverable:** Containerized application running on AWS EC2 with HTTPS, CI/CD pipeline, and dependency scanning.
+> **Backup security:** S3 bucket must be private, server-side encrypted (SSE-S3 or SSE-KMS), and access-restricted to the EC2 instance via an IAM role — never hardcoded AWS credentials.
+
+---
+
+#### Step 3 — Terraform (Infrastructure as Code)
+
+After the manual deployment is live and understood, codify the same infrastructure in Terraform.
+
+Requirements:
+- `terraform/main.tf` — EC2 instance (`t3.micro`, Ubuntu 24.04 AMI), security group (ports 22/80/443), Elastic IP, EBS volume for SQLite, IAM role + instance profile for S3 backup access
+- `terraform/variables.tf` — parameterise region, key pair name, instance type, S3 bucket name
+- `terraform/outputs.tf` — output the public IP and instance ID
+- `terraform/backend.tf` — remote state in S3 + DynamoDB lock table (prevents concurrent applies)
+- `.terraform.lock.hcl` — committed to repo; pins provider versions
+- `.gitignore` — exclude `terraform.tfstate`, `terraform.tfstate.backup`, `.terraform/` (local cache)
+- `docs/terraform.md` — guide covering `terraform init`, `terraform plan`, `terraform apply`, `terraform import` (for importing the already-running instance), and `terraform destroy` warning (EBS volume must be protected with `prevent_destroy = true`)
+
+> **`terraform import` workflow:** Since the EC2 instance was created manually in Step 2, use `terraform import` to bring the existing resources under Terraform state management — no need to destroy and recreate the live server.
+>
+> **State file security:** `terraform.tfstate` contains resource IDs and may contain sensitive values. Never commit it to the repository. Store remote state in a private S3 bucket with versioning enabled and DynamoDB for state locking.
+>
+> **`prevent_destroy` guard:** Add `lifecycle { prevent_destroy = true }` to the EBS volume resource. A `terraform destroy` on a database-backed app must never silently wipe persistent storage.
+
+---
+
+**Deliverable:** Application running on AWS EC2 with HTTPS, CI/CD pipeline, dependency scanning, and fully reproducible Terraform infrastructure.
 
 **Success Criteria:**
 - [ ] `docker build` succeeds and the container starts the app correctly
@@ -699,11 +742,14 @@ Requirements:
 - [ ] Container process runs as a non-root user
 - [ ] Application is accessible over HTTPS at a public domain; HTTP redirects to HTTPS
 - [ ] TLS certificate is valid; no browser security warnings
+- [ ] `terraform plan` on the existing infrastructure shows zero changes (imported state matches real resources)
+- [ ] `terraform apply` on a fresh environment reproduces the full stack without manual steps
 
 **Test Focus:**
 - Container smoke test: app responds to HTTP requests after `docker-compose up`
 - CI pipeline passes cleanly on a fresh runner with no cached state
 - Rate limiter reads `X-Forwarded-For` in production mode; ignores it in dev mode
+- `GET /health` returns 200 with `{"status": "ok", "db": "ok"}` without authentication
 
 ---
 

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from app.config.settings import settings
 from app.utils.helpers import format_datetime, truncate
 
 # Absolute path: this file lives at app/templates_config.py, so
@@ -30,3 +31,6 @@ templates.env.globals["format_datetime"] = format_datetime
 
 # Filter available as {{ text | truncate_str }} in every template.
 templates.env.filters["truncate_str"] = truncate
+
+# Session timeout in seconds — read by session_timeout.js via <meta name="sv-timeout">.
+templates.env.globals["session_timeout_seconds"] = settings.SESSION_TIMEOUT_MINUTES * 60

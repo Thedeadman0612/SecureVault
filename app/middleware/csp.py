@@ -82,13 +82,13 @@ middleware (CSRF 403, Session errors) — and stamps the CSP header on all
 of them.  CSP needs no session data, so its position relative to
 SessionMiddleware is not security-relevant.
 
-  app.add_middleware(AuthGuard)              # innermost
-  app.add_middleware(CSRFMiddleware)         # middle-inner
-  app.add_middleware(SessionMiddleware, ...) # middle-outer
-  app.add_middleware(CSPMiddleware)          # outermost — added last
+  app.add_middleware(AuthGuard)                       # innermost
+  app.add_middleware(CSRFMiddleware)                  # middle-inner
+  app.add_middleware(EncryptedSessionMiddleware, ...) # middle-outer
+  app.add_middleware(CSPMiddleware)                   # outermost — added last
 """
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -177,7 +177,7 @@ class CSPMiddleware(BaseHTTPMiddleware):
     No request-side logic is needed: headers are added on the response path only.
     """
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         response = await call_next(request)
         response.headers[_CSP_HEADER_NAME] = CSP_HEADER_VALUE
         response.headers[_X_FRAME_OPTIONS_NAME] = _X_FRAME_OPTIONS_VALUE

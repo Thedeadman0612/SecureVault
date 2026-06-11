@@ -103,8 +103,9 @@ This app decrypts vault entries on the server and renders plaintext HTML to the 
 | `app/services/` | Business logic: auth service, vault CRUD service |
 | `app/services/ai_service.py` | Anthropic Claude API client; metadata-only AI features; metadata extraction helpers — never accepts raw password/username as a parameter (Phase 7) |
 | `app/security/` | Encryption service (Fernet + AES-256-GCM), key derivation, password hashing |
+| `app/security/totp.py` | TOTP secret generation, provisioning URI, token verification, recovery code generation/hashing (Phase 3) |
 | `app/security/tokens.py` | JWT access + refresh token generation and verification via `PyJWT` (Phase 10) |
-| `app/models/` | SQLAlchemy ORM models (`User`, `VaultEntry`) |
+| `app/models/` | SQLAlchemy ORM models (`User`, `VaultEntry`, `RecoveryCode`) |
 | `app/schemas/` | Pydantic request/response schemas |
 | `app/database/` | SQLAlchemy engine, session factory, `get_db` dependency; WAL mode pragma hook |
 | `app/middleware/auth_guard.py` | Redirect unauthenticated requests to `/login`; exempt `/login`, `/setup`, `/static/*`, `/2fa/*` |
@@ -167,27 +168,29 @@ All security hardening files implemented and hardened through code review. See `
 
 ---
 
-### Phase 3 — TOTP Two-Factor Authentication — Status: 🔴 Not Started
+### Phase 3 — TOTP Two-Factor Authentication — Status: ✅ Complete
 
 > **Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
 > TOTP (RFC 6238) is the industry standard — supported by Google Authenticator, Authy, 1Password, Bitwarden, etc.
 > 2FA is optional per-user: users who skip setup continue using password-only login.
 
-| File / Area | What's needed |
+#### ✅ Completed
+
+| File / Area | What was implemented |
 |---|---|
-| `app/models/user.py` | Add `totp_secret: Mapped[str \| None]` (NULL = 2FA disabled; stored AES-GCM encrypted — same key as vault), `totp_enabled: Mapped[bool]` (default False) |
-| `app/models/recovery_code.py` | `RecoveryCode` ORM model — `user_id` FK, `code_hash` (Argon2id hash of 8-char alphanumeric code), `used_at` timestamp (NULL = unused); 8 codes generated at 2FA setup, each usable exactly once |
-| `app/migrations/` | New Alembic migration for `totp_secret`, `totp_enabled` columns on `users` and new `recovery_codes` table |
-| `app/security/totp.py` | New module — `generate_secret() -> str` (`pyotp.random_base32()`); `get_provisioning_uri(secret, issuer) -> str` (for QR code); `verify_totp(secret, token, valid_window=1) -> bool`; `generate_recovery_codes() -> list[str]` (8 × 8-char codes, `secrets.token_urlsafe`); `hash_recovery_code(code) -> str` (Argon2id); `verify_recovery_code(code, hash) -> bool` |
-| `app/services/auth_service.py` | `enable_2fa(user_id, secret, confirmation_token, db) -> list[str]` — verifies the first TOTP code before activating, returns recovery codes; `disable_2fa(user_id, db)`; extend `login()` to return a `requires_totp=True` flag when 2FA is enabled (so the route redirects to the TOTP prompt instead of directly to /vault) |
-| `app/routes/auth.py` | Add `GET /2fa/setup` + `POST /2fa/setup` (render QR code, accept confirmation code, return recovery codes); `GET /2fa/verify` + `POST /2fa/verify` (TOTP prompt mid-login); `POST /2fa/disable`; update `POST /login` flow to redirect to `/2fa/verify` when `requires_totp=True`; use `session["pending_user_id"]` for the mid-login state so AuthGuard still blocks /vault until 2FA is passed |
-| `app/templates/2fa_setup.html` | QR code image (`<img src="data:image/png;base64,...">` — generated server-side with `qrcode[pil]`); manual secret entry fallback; recovery codes display (shown once — "save these now" warning); confirm-first-code form |
-| `app/templates/2fa_verify.html` | 6-digit TOTP code input; "Use recovery code" link |
-| `app/templates/2fa_recovery.html` | Recovery code text input; redirects back to TOTP verify on wrong code |
-| `app/middleware/auth_guard.py` | Exempt `/2fa/verify` and `/2fa/recovery` from the encryption-key check (user is mid-login: password passed, TOTP not yet); add `/2fa/*` to setup exempt paths |
-| `requirements.txt` | Add `pyotp>=2.9` and `qrcode[pil]>=7.4` |
-| `app/tests/test_totp.py` | Unit tests: secret generation format, URI format, TOTP verification (valid/invalid/expired), recovery code generation (length, uniqueness), recovery code hashing round-trip |
-| `app/tests/test_auth_routes.py` | Integration tests: 2FA setup flow, TOTP verify blocks vault before code, recovery code invalidated after use, disable 2FA, login without 2FA still works |
+| `requirements.txt` | Added `pyotp>=2.9` and `qrcode[pil]>=7.4` |
+| `app/models/user.py` | Added `totp_secret: Mapped[str \| None]` (NULL = 2FA disabled; AES-GCM encrypted) and `totp_enabled: Mapped[bool]` (default False); added `recovery_codes` relationship |
+| `app/models/recovery_code.py` | New `RecoveryCode` ORM model — `user_id` FK (CASCADE), `code_hash` (Argon2id), `used_at` (NULL = unused) |
+| `app/migrations/versions/d4e5f6a7b8c9_add_totp_2fa.py` | Alembic migration adding `totp_secret`, `totp_enabled` to `users` and creating `recovery_codes` table with index |
+| `app/security/totp.py` | New module: `generate_secret()`, `get_provisioning_uri()`, `verify_totp()`, `generate_recovery_codes()` (8 × 8-char codes via `secrets.token_urlsafe`), `hash_recovery_code()` (Argon2id), `verify_recovery_code()` |
+| `app/services/auth_service.py` | Added `enable_2fa()` (verifies first code, encrypts secret AES-GCM, stores 8 hashed recovery codes); `disable_2fa()` (clears secret, deletes codes); extended `login()` to return `True` when TOTP step required (sets `pending_user_id` + `pending_encryption_key`) |
+| `app/routes/auth.py` | Added `GET/POST /2fa/setup`, `GET/POST /2fa/verify`, `GET/POST /2fa/recovery`, `POST /2fa/disable`; updated `POST /login` to redirect to `/2fa/verify` when `requires_totp=True`; QR code generated server-side via `qrcode[pil]` |
+| `app/middleware/auth_guard.py` | Exempted `/2fa/verify` and `/2fa/recovery` from encryption-key check so mid-login users can reach the TOTP prompt |
+| `app/tests/test_totp.py` | 18 unit tests covering `generate_secret` format/randomness, `get_provisioning_uri` structure, `verify_totp` valid/invalid/wrong-secret, `generate_recovery_codes` count/length/uniqueness, `hash_recovery_code` Argon2id format, `verify_recovery_code` correct/wrong |
+| `app/templates/2fa_setup.html` | Three-state template: setup form with QR code + manual secret fallback + confirmation input; recovery codes display (shown once with save-now warning); optional disable button when 2FA already active |
+| `app/templates/2fa_verify.html` | 6-digit TOTP input form; "Use recovery code" link to `/2fa/recovery` |
+| `app/templates/2fa_recovery.html` | Recovery code text input form; "Use authenticator app" link back to `/2fa/verify` |
+| `app/tests/test_auth_routes.py` | 25 new 2FA integration tests across `TestLogin2FA`, `TestTotpVerify`, `TestRecoveryCodes`, `TestDisable2FA`; `_enable_2fa` helper with `generate_secret` mock; `client_2fa_enabled` and `client_2fa_pending` fixtures |
 
 > ⚠️ **TOTP secret storage:** The secret must be encrypted at rest — treat it like a vault credential. Use `encrypt_field_gcm(secret, encryption_key)` and store the ciphertext in `users.totp_secret`. Decrypt at login time the same way vault fields are decrypted. Never log the plaintext secret.
 >
@@ -209,7 +212,7 @@ pytest ≥80% coverage, Ruff zero violations, full type hints, structured loggin
 
 ### Phase 6 — DevSecOps + Cloud Deployment — Status: 🔴 Not Started
 
-Dockerfile, docker-compose, GitHub Actions CI, pip-audit, AWS EC2 t3.micro (nginx + certbot + systemd), EBS volume for DB, nightly S3 backup. See `spec.md §Phase 6`.
+Dockerfile, docker-compose, GitHub Actions CI, pip-audit, AWS EC2 t3.micro (nginx + certbot + systemd), EBS volume for DB, nightly S3 backup. Then codify the same infra in **Terraform** (`terraform/`) with remote state in S3 + DynamoDB lock. See `spec.md §Phase 6` for the full two-step approach.
 
 > ⚠️ **Rate limiter and reverse proxy:** When nginx is in front, `request.client.host` is the proxy's IP. Update `LoginRateLimitMiddleware` to read `X-Forwarded-For` only when `ENVIRONMENT=production`.
 

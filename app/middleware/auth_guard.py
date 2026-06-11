@@ -17,19 +17,20 @@ session is already active (preventing authenticated users from seeing the
 login/setup pages).
 
 MIDDLEWARE ORDER IN main.py:
-  SessionMiddleware must run BEFORE AuthGuard so the session dict is
+  EncryptedSessionMiddleware must run BEFORE AuthGuard so the session dict is
   populated before we inspect it. In FastAPI/Starlette, the last middleware
   added with add_middleware() is the outermost (runs first on the way in).
   Therefore:
-    app.add_middleware(AuthGuard)              # innermost — runs second
-    app.add_middleware(SessionMiddleware, ...) # outermost — runs first
+    app.add_middleware(AuthGuard)                       # innermost — runs second
+    app.add_middleware(EncryptedSessionMiddleware, ...) # outermost — runs first
 
   Reading session["encryption_key"] in AuthGuard is only safe because
-  SessionMiddleware has already decoded the signed cookie by the time
-  AuthGuard.dispatch() is called.
+  EncryptedSessionMiddleware has already decrypted the Fernet-encrypted cookie
+  by the time AuthGuard.dispatch() is called.
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -38,7 +39,15 @@ from starlette.responses import RedirectResponse, Response
 logger = logging.getLogger(__name__)
 
 # Paths that do not require an active session.
-_EXEMPT_EXACT: frozenset[str] = frozenset({"/login", "/setup"})
+# /2fa/verify and /2fa/recovery are mid-login: the user has passed the
+# password check (pending_user_id in session) but encryption_key is not yet
+# set. The route handlers themselves validate the pending session state.
+_EXEMPT_EXACT: frozenset[str] = frozenset({
+    "/login",
+    "/setup",
+    "/2fa/verify",
+    "/2fa/recovery",
+})
 _EXEMPT_PREFIXES: tuple[str, ...] = ("/static/",)
 
 _LOGIN_URL = "/login"
@@ -57,7 +66,7 @@ class AuthGuard(BaseHTTPMiddleware):
     to decrypt entries.
     """
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         path: str = request.url.path
 
         # Pass exempt paths straight through — no session check needed.

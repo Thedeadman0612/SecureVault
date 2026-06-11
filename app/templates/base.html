@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}SecureVault{% endblock %}</title>
+  <meta name="sv-timeout" content="{{ session_timeout_seconds }}">
   {#
     Tailwind Play CDN served from /static/js/ (self-hosted since Phase 2).
     Serving it locally means script-src 'self' is sufficient — no external
@@ -29,6 +30,10 @@
 
   {# Page-specific scripts (must use external files — no inline scripts allowed by CSP). #}
   {% block scripts %}{% endblock %}
+
+  {# Inactivity timeout: auto-redirects to /login after SESSION_TIMEOUT_MINUTES of idle time.
+     Skipped on /login, /setup, /2fa/* by the script itself. #}
+  <script src="/static/js/session_timeout.js"></script>
 
 </body>
 </html>

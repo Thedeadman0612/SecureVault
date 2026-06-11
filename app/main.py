@@ -43,6 +43,7 @@ ROUTERS:
   /          → app/routes/vault.py (vault dashboard, entry CRUD)
 """
 
+import html
 import logging
 import logging.handlers
 from pathlib import Path
@@ -270,16 +271,18 @@ def _error_page(title: str, message: str) -> str:
     is added to app/templates/. Kept inline here to avoid a template
     dependency in the error handler itself (template loading can fail).
     """
+    safe_title = html.escape(title)
+    safe_message = html.escape(message)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SecureVault — {title}</title>
+  <title>SecureVault — {safe_title}</title>
 </head>
 <body>
-  <h1>{title}</h1>
-  <p>{message}</p>
+  <h1>{safe_title}</h1>
+  <p>{safe_message}</p>
   <a href="/">Return to vault</a>
 </body>
 </html>"""

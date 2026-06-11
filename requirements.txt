@@ -1,4 +1,4 @@
-# Phase 1 dependencies for SecureVault
+# SecureVault dependencies
 
 # Web framework and ASGI server
 fastapi>=0.115.0
@@ -27,8 +27,9 @@ cryptography>=42.0.0
 # Password hashing (Argon2)
 argon2-cffi>=23.1.0
 
-# Session signing (used by Starlette SessionMiddleware)
-itsdangerous>=2.2.0
+# TOTP two-factor authentication (Phase 3)
+pyotp>=2.9
+qrcode[pil]>=7.4
 
 # Testing
 pytest>=8.2.0

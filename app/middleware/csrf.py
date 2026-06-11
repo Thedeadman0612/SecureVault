@@ -60,7 +60,7 @@ also CSRF-protected.  Runs *inside* SessionMiddleware so that
 
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -91,7 +91,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
     the full form data unchanged.
     """
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         # ------------------------------------------------------------------
         # Step 1 — Ensure a session token exists.
         # ------------------------------------------------------------------

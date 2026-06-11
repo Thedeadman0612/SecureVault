@@ -41,9 +41,11 @@ class SetupRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_min_length(cls, value: str) -> str:
-        """Enforce a minimum master password length of 8 characters."""
+        """Enforce master password length: minimum 12, maximum 1024 characters."""
         if len(value) < 12:
             raise ValueError("Master password must be at least 12 characters.")
+        if len(value) > 1024:
+            raise ValueError("Master password must be at most 1024 characters.")
         return value
 
     @model_validator(mode="after")

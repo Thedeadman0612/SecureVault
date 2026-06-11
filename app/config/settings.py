@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +12,7 @@ class Settings(BaseSettings):
     # Default is "production" — fail-secure: forgetting to set this variable
     # gives you production-grade cookie security, not relaxed dev settings.
     # Set ENVIRONMENT=development in your .env file for local development only.
-    ENVIRONMENT: str = "production"
+    ENVIRONMENT: Literal["development", "production"] = "production"
 
     # Idle session timeout.  Reduced from 30 → 10 minutes in Phase 2 per
     # OWASP Session Management Cheat Sheet §Session Expiration.
