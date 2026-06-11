@@ -563,7 +563,7 @@ Requirements:
 - Both algorithms decrypt their own ciphertext correctly; cross-decryption fails with `InvalidToken`
 - CSP header is present on vault and entry routes; value includes `default-src 'self'`
 
-### Phase 3 — TOTP Two-Factor Authentication
+### Phase 3 — TOTP Two-Factor Authentication ✅ Complete
 
 **Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
 
@@ -584,13 +584,13 @@ Requirements:
 **Deliverable:** Optional TOTP 2FA with QR code setup, recovery codes, and a mid-login verification step.
 
 **Success Criteria:**
-- [ ] User can enable 2FA; scanning the QR code with Google Authenticator produces valid codes
-- [ ] Login with 2FA enabled requires both the correct password and a valid TOTP code
-- [ ] A valid recovery code can be used in place of TOTP (and is then marked used/invalid)
-- [ ] Each recovery code is usable exactly once; subsequent attempts with the same code are rejected
-- [ ] `/vault` is inaccessible after the password step until TOTP is confirmed
-- [ ] Disabling 2FA requires a valid TOTP confirmation
-- [ ] `totp_secret` in the database is encrypted ciphertext, not the raw base32 secret
+- [x] User can enable 2FA; scanning the QR code with Google Authenticator produces valid codes
+- [x] Login with 2FA enabled requires both the correct password and a valid TOTP code
+- [x] A valid recovery code can be used in place of TOTP (and is then marked used/invalid)
+- [x] Each recovery code is usable exactly once; subsequent attempts with the same code are rejected
+- [x] `/vault` is inaccessible after the password step until TOTP is confirmed
+- [x] Disabling 2FA requires a valid TOTP confirmation
+- [x] `totp_secret` in the database is encrypted ciphertext, not the raw base32 secret
 
 **Test Focus:**
 - TOTP verification: valid code passes, expired code (outside `valid_window`) fails, wrong code fails
