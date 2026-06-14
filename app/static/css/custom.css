@@ -3,11 +3,11 @@
 /* Dark mode toggle — explicit positioning so Tailwind CDN scan gaps can't hide the button. */
 #dark-mode-toggle {
   position: fixed;
-  bottom: 1.25rem;   /* bottom-5 */
-  right:  1.25rem;   /* right-5  */
-  z-index: 40;       /* z-40     */
-  width: 2.5rem;
-  height: 2.5rem;
+  top:   0.75rem;    /* top-3  */
+  right: 1rem;       /* right-4 */
+  z-index: 40;       /* z-40   */
+  width: 2rem;
+  height: 2rem;
   border-radius: 9999px;
   border: none;
   cursor: pointer;
