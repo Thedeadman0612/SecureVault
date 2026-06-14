@@ -170,75 +170,17 @@ All security hardening files implemented and hardened through code review. See `
 
 ### Phase 3 — TOTP Two-Factor Authentication — Status: ✅ Complete
 
-> **Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
-> TOTP (RFC 6238) is the industry standard — supported by Google Authenticator, Authy, 1Password, Bitwarden, etc.
-> 2FA is optional per-user: users who skip setup continue using password-only login.
+All TOTP 2FA files implemented and hardened through code review. See `spec.md §Phase 3` and git history for full details.
 
-#### ✅ Completed
-
-| File / Area | What was implemented |
-|---|---|
-| `requirements.txt` | Added `pyotp>=2.9` and `qrcode[pil]>=7.4` |
-| `app/models/user.py` | Added `totp_secret: Mapped[str \| None]` (NULL = 2FA disabled; AES-GCM encrypted) and `totp_enabled: Mapped[bool]` (default False); added `recovery_codes` relationship |
-| `app/models/recovery_code.py` | New `RecoveryCode` ORM model — `user_id` FK (CASCADE), `code_hash` (Argon2id), `used_at` (NULL = unused) |
-| `app/migrations/versions/d4e5f6a7b8c9_add_totp_2fa.py` | Alembic migration adding `totp_secret`, `totp_enabled` to `users` and creating `recovery_codes` table with index |
-| `app/security/totp.py` | New module: `generate_secret()`, `get_provisioning_uri()`, `verify_totp()`, `generate_recovery_codes()` (8 × 8-char codes via `secrets.token_urlsafe`), `hash_recovery_code()` (Argon2id), `verify_recovery_code()` |
-| `app/services/auth_service.py` | Added `enable_2fa()` (verifies first code, encrypts secret AES-GCM, stores 8 hashed recovery codes); `disable_2fa()` (clears secret, deletes codes); extended `login()` to return `True` when TOTP step required (sets `pending_user_id` + `pending_encryption_key`) |
-| `app/routes/auth.py` | Added `GET/POST /2fa/setup`, `GET/POST /2fa/verify`, `GET/POST /2fa/recovery`, `POST /2fa/disable`; updated `POST /login` to redirect to `/2fa/verify` when `requires_totp=True`; QR code generated server-side via `qrcode[pil]` |
-| `app/middleware/auth_guard.py` | Exempted `/2fa/verify` and `/2fa/recovery` from encryption-key check so mid-login users can reach the TOTP prompt |
-| `app/tests/test_totp.py` | 18 unit tests covering `generate_secret` format/randomness, `get_provisioning_uri` structure, `verify_totp` valid/invalid/wrong-secret, `generate_recovery_codes` count/length/uniqueness, `hash_recovery_code` Argon2id format, `verify_recovery_code` correct/wrong |
-| `app/templates/2fa_setup.html` | Three-state template: setup form with QR code + manual secret fallback + confirmation input; recovery codes display (shown once with save-now warning); optional disable button when 2FA already active |
-| `app/templates/2fa_verify.html` | 6-digit TOTP input form; "Use recovery code" link to `/2fa/recovery` |
-| `app/templates/2fa_recovery.html` | Recovery code text input form; "Use authenticator app" link back to `/2fa/verify` |
-| `app/tests/test_auth_routes.py` | 25 new 2FA integration tests across `TestLogin2FA`, `TestTotpVerify`, `TestRecoveryCodes`, `TestDisable2FA`; `_enable_2fa` helper with `generate_secret` mock; `client_2fa_enabled` and `client_2fa_pending` fixtures |
-
-> ⚠️ **TOTP secret storage:** The secret must be encrypted at rest — treat it like a vault credential. Use `encrypt_field_gcm(secret, encryption_key)` and store the ciphertext in `users.totp_secret`. Decrypt at login time the same way vault fields are decrypted. Never log the plaintext secret.
+> ⚠️ **TOTP secret storage:** Encrypted AES-GCM at rest in `users.totp_secret` — treat like a vault credential. Never log the plaintext secret.
 >
-> ⚠️ **Mid-login session state:** Use `session["pending_user_id"]` to track a user who has passed the password check but not yet the TOTP check. Clear this key on: TOTP success (replace with full session), TOTP failure after N attempts (lock), or any navigation away from `/2fa/verify`. `AuthGuard` must NOT grant access to the vault based on `pending_user_id` — only a fully established `encryption_key` in session grants access.
+> ⚠️ **Mid-login session state:** `session["pending_user_id"]` tracks a user past the password check but before TOTP. `AuthGuard` grants vault access only on a fully established `session["encryption_key"]` — never on `pending_user_id` alone.
 
 ---
 
-### Phase 4 — UX Improvements — Status: 🟡 In Progress (Sub-tasks 1 & 2 complete)
+### Phase 4 — UX Improvements — Status: ✅ Complete
 
-> **Goal:** Improve usability and add practical data management features.
-
-#### ✅ Completed (Sub-task 1 — search, password generator, strength indicator)
-
-| File / Area | What was implemented |
-|---|---|
-| `app/routes/vault.py` | `get_vault()` accepts `q` and `category` query params for form pre-fill; always fetches all entries (client-side JS handles filtering); passes `q`, `active_category`, `categories` to template |
-| `app/services/vault_service.py` | `get_entries()` extended with optional `q` (title/website `ilike` OR) and `category` (exact match) filters (used by tests/future callers); new `get_categories()` returns sorted distinct categories for the dropdown |
-| `app/templates/vault.html` | Search input (`id="vault-search-q"`) + category `<select>` (`id="vault-search-category"`); `data-vault-entry`/`data-title`/`data-website`/`data-category` on each `<tr>` for JS filtering; "No entries found" block (`id="vault-empty-filtered"`, hidden by default); "vault is empty" state; dynamic count label |
-| `app/templates/entry_form.html` | "Generate password" button below the password field; strength indicator bar + label (`hidden` until input); password generator modal (`id="password-generator-modal"`) with length slider (8–64, default 16), uppercase/numbers/symbols checkboxes, Regenerate + Use Password buttons |
-| `app/static/js/vault_search.js` | New file: live client-side filtering as user types (debounced 150 ms); category select filters instantly; form submit intercepted (no page reload); URL synced via `history.replaceState`; Clear button shown/hidden dynamically; "No entries found" block toggled when filter matches nothing |
-| `app/static/js/entry_form.js` | Real-time password strength indicator (5 levels: Very Weak → Very Strong) driven by length + character-set checks; fires on `input` event and pre-fills in edit mode |
-| `app/static/js/password_generator.js` | New file: `generatePassword()` uses `crypto.getRandomValues` + Fisher-Yates shuffle; modal open/close (button, backdrop click, Escape key); "Use Password" fills `form-password` and fires `input` event so strength updates |
-
-#### ✅ Completed (Sub-task 1 add-on — logging enhancements)
-
-| File / Area | What was implemented |
-|---|---|
-| `app/middleware/auth_guard.py` | Upgraded from `DEBUG` to `INFO`; classifies redirect cause as `session_expired_or_no_cookie`, `pending_totp`, or `session_missing_key`; includes `user_id` and HTTP method in log line; added `/auth/timeout-notify` to exempt paths |
-| `app/middleware/encrypted_session.py` | Distinguishes Fernet TTL expiry (logs `INFO`) from cookie tampering/key-rotation (logs `WARNING`) by attempting a TTL-free decode; fixed redundant `ValueError` subclasses in except clause |
-| `app/routes/auth.py` | Added `GET /auth/timeout-notify` — exempt endpoint called by JS before inactivity redirect; reads `user_id` from the still-live session and logs `INFO "Client-side inactivity timeout fired"` |
-| `app/static/js/session_timeout.js` | `logout()` now fires `fetch('/auth/timeout-notify', { keepalive: true })` before navigating so the timeout is recorded server-side with the user_id |
-
-#### ✅ Completed (Sub-task 2 — clipboard auto-clear, dark mode, responsive layout)
-
-| File / Area | What was implemented |
-|---|---|
-| `app/static/js/entry_detail.js` | `copyValue()` now shows a live "Clears in 30s" countdown on the button and calls `navigator.clipboard.writeText('')` after 30 s to wipe the clipboard; per-button `WeakMap` timers allow independent countdowns for username and password; clicking Copy again restarts the 30-second window |
-| `app/static/css/dark.css` | New file: `html.dark` CSS overrides for all key Tailwind utility classes (backgrounds, text, borders, inputs, buttons, table rows, dividers); applied when `dark_mode.js` adds the `dark` class to `<html>` |
-| `app/static/js/dark_mode.js` | New file: runs immediately on parse to apply saved preference before first paint (prevents white flash); toggles `dark` class on `<html>`; persists choice to `localStorage` under key `sv-dark-mode`; updates toggle button emoji (🌙 / ☀️) |
-| `app/templates/base.html` | Added `<link rel="stylesheet" href="/static/css/dark.css">` after Tailwind; added `<script src="/static/js/dark_mode.js">` (non-deferred, runs before paint); added fixed bottom-right `#dark-mode-toggle` button (`z-40`, below modals and timeout banner) that appears on every page |
-| `app/templates/vault.html` | Nav items now use `flex-wrap gap-2` so they wrap on small screens instead of overflowing; table wrapped in `<div class="overflow-x-auto">` for horizontal scroll on mobile; Website column and cells hidden on `< sm` with `hidden sm:table-cell` |
-| `app/templates/entry_detail.html` | Header row uses `flex-wrap` so Edit/Delete buttons stack below the title on narrow screens; field rows use `flex-wrap` + `min-w-0` so long usernames/websites break correctly; Copy buttons have `min-w-[4rem]` to prevent label-jump during countdown; Notes `<p>` has `break-words` |
-
-#### ❌ Still To Implement
-
-| Sub-task | Features |
-|---|---|
-| Sub-task 3 | `POST /vault/import` — KeePass XML + LastPass CSV; `GET /vault/export` — KeePass XML + LastPass CSV |
+All UX improvement files implemented and hardened through code review. See `spec.md §Phase 4` and git history for full details.
 
 ---
 

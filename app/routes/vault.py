@@ -37,13 +37,14 @@ ERROR HANDLING:
 import base64
 import logging
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.schemas.vault import VaultEntryCreate, VaultEntryUpdate
+from app.services import import_export as import_export_svc
 from app.services import vault_service
 from app.templates_config import templates
 from app.utils.helpers import first_validation_error, none_if_empty
@@ -109,13 +110,15 @@ async def get_vault(
     request: Request,
     q: str | None = Query(default=None),
     category: str | None = Query(default=None),
+    imported: int | None = Query(default=None),
+    import_error: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Render the vault dashboard with filtered, decrypted entries.
 
     Accepts optional `q` (title/website text search) and `category` (exact
     match) query parameters. Both filters operate on plaintext columns only.
-    Passes `entries`, `categories`, `q`, and `active_category` to the template.
+    `imported` and `import_error` carry one-shot flash state from POST /vault/import.
     """
     ctx = _session_context(request)
     if isinstance(ctx, RedirectResponse):
@@ -146,7 +149,129 @@ async def get_vault(
             "q": q or "",
             "active_category": category or "",
             "categories": categories,
+            "imported": imported,
+            "import_error": import_error,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Import / Export
+# ---------------------------------------------------------------------------
+
+@router.post("/vault/import", response_model=None)
+async def post_import_vault(
+    request: Request,
+    import_file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Parse an uploaded KeePass XML or LastPass CSV file and create vault entries.
+
+    File format is inferred from the filename extension (.xml → KeePass, .csv → LastPass).
+    All imported entries are encrypted with the user's current vault key before storage.
+    Entries that fail validation (e.g. empty title) are skipped; the rest are imported.
+    Redirects to /vault with a success count or an error message as a query parameter.
+
+    Security:
+      - Max 5 MB upload to limit memory pressure from malformed XML.
+      - No sensitive field values are logged.
+      - CSRF token validated by CSRFMiddleware before this handler runs.
+    """
+    ctx = _session_context(request)
+    if isinstance(ctx, RedirectResponse):
+        return ctx
+    raw_key, user_id = ctx
+
+    content = await import_file.read()
+    if len(content) > import_export_svc.MAX_IMPORT_BYTES:
+        return RedirectResponse(
+            f"{_VAULT_URL}?import_error=File+too+large+(5+MB+max)",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    filename = (import_file.filename or "").lower()
+    try:
+        if filename.endswith(".xml"):
+            parsed = import_export_svc.parse_keepass_xml(content)
+        elif filename.endswith(".csv"):
+            parsed = import_export_svc.parse_lastpass_csv(content)
+        else:
+            return RedirectResponse(
+                f"{_VAULT_URL}?import_error=Unsupported+format+(use+.xml+or+.csv)",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+    except import_export_svc.ImportError:
+        logger.warning("Import parse failed for user id=%d.", user_id)
+        return RedirectResponse(
+            f"{_VAULT_URL}?import_error=Could+not+parse+file",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    count = 0
+    for ie in parsed:
+        try:
+            data = VaultEntryCreate(
+                title=ie.title,
+                website=ie.website,
+                category=ie.category,
+                username=ie.username or "",
+                password=ie.password or "",
+                notes=ie.notes,
+            )
+            vault_service.create_entry(data, user_id, raw_key, db)
+            count += 1
+        except Exception:
+            logger.warning("Skipped one entry during import for user id=%d.", user_id)
+
+    logger.info("Import complete: %d entries created for user id=%d.", count, user_id)
+    return RedirectResponse(
+        f"{_VAULT_URL}?imported={count}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/vault/export")
+async def get_export_vault(
+    request: Request,
+    format: str = Query(default="keepass"),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download all vault entries as a KeePass XML or LastPass CSV file.
+
+    Query parameter:
+      format=keepass  (default) → KeePass 2.x XML, filename securevault_export.xml
+      format=lastpass           → LastPass CSV,     filename securevault_export.csv
+
+    All sensitive fields are decrypted in memory and written into the export
+    file. The file is sent as an attachment; it is never stored server-side.
+    """
+    ctx = _session_context(request)
+    if isinstance(ctx, RedirectResponse):
+        return ctx
+    raw_key, user_id = ctx
+
+    try:
+        entries = vault_service.get_entries(user_id, raw_key, db)
+    except HTTPException:
+        return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_302_FOUND)
+
+    if format == "lastpass":
+        content = import_export_svc.build_lastpass_csv(entries)
+        filename = "securevault_export.csv"
+        media_type = "text/csv; charset=utf-8"
+    else:
+        content = import_export_svc.build_keepass_xml(entries)
+        filename = "securevault_export.xml"
+        media_type = "application/xml; charset=utf-8"
+
+    logger.info(
+        "Export: %d entries for user id=%d (format=%s).",
+        len(entries), user_id, format,
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
