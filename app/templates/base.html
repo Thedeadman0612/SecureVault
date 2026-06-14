@@ -12,6 +12,14 @@
     Phase 5 will replace this with a compiled CSS file (no JS at all).
   #}
   <script src="/static/js/tailwind.min.js"></script>
+  {# Custom CSS and dark mode overrides — loaded after Tailwind so selectors win. #}
+  <link rel="stylesheet" href="/static/css/custom.css">
+  <link rel="stylesheet" href="/static/css/dark.css">
+  {#
+    dark_mode.js runs immediately (not deferred) so it applies the saved dark
+    preference before the first paint — prevents a white flash on reload.
+  #}
+  <script src="/static/js/dark_mode.js"></script>
 </head>
 <body class="bg-gray-50 min-h-screen text-gray-900 antialiased">
 
@@ -34,6 +42,13 @@
   {# Inactivity timeout: auto-redirects to /login after SESSION_TIMEOUT_MINUTES of idle time.
      Skipped on /login, /setup, /2fa/* by the script itself. #}
   <script src="/static/js/session_timeout.js"></script>
+
+  {#
+    Dark mode toggle — fixed bottom-right, visible on all authenticated pages.
+    Emoji is set by dark_mode.js once the DOM is ready.
+    z-40 sits below modals (z-50) and the session timeout banner (z-[9999]).
+  #}
+  <button id="dark-mode-toggle" type="button" aria-label="Switch to dark mode" title="Dark mode" class="fixed bottom-5 right-5 p-2.5 rounded-full bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors shadow-md z-40 text-base leading-none focus:outline-none focus:ring-2 focus:ring-indigo-500">🌙</button>
 
 </body>
 </html>

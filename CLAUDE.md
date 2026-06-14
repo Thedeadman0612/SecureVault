@@ -198,11 +198,11 @@ All security hardening files implemented and hardened through code review. See `
 
 ---
 
-### Phase 4 — UX Improvements — Status: 🟡 In Progress (Sub-task 1 complete)
+### Phase 4 — UX Improvements — Status: 🟡 In Progress (Sub-tasks 1 & 2 complete)
 
 > **Goal:** Improve usability and add practical data management features.
 
-#### ✅ Completed (Sub-task 1)
+#### ✅ Completed (Sub-task 1 — search, password generator, strength indicator)
 
 | File / Area | What was implemented |
 |---|---|
@@ -214,7 +214,7 @@ All security hardening files implemented and hardened through code review. See `
 | `app/static/js/entry_form.js` | Real-time password strength indicator (5 levels: Very Weak → Very Strong) driven by length + character-set checks; fires on `input` event and pre-fills in edit mode |
 | `app/static/js/password_generator.js` | New file: `generatePassword()` uses `crypto.getRandomValues` + Fisher-Yates shuffle; modal open/close (button, backdrop click, Escape key); "Use Password" fills `form-password` and fires `input` event so strength updates |
 
-#### ✅ Completed (logging enhancements — cross-cutting)
+#### ✅ Completed (Sub-task 1 add-on — logging enhancements)
 
 | File / Area | What was implemented |
 |---|---|
@@ -223,11 +223,21 @@ All security hardening files implemented and hardened through code review. See `
 | `app/routes/auth.py` | Added `GET /auth/timeout-notify` — exempt endpoint called by JS before inactivity redirect; reads `user_id` from the still-live session and logs `INFO "Client-side inactivity timeout fired"` |
 | `app/static/js/session_timeout.js` | `logout()` now fires `fetch('/auth/timeout-notify', { keepalive: true })` before navigating so the timeout is recorded server-side with the user_id |
 
+#### ✅ Completed (Sub-task 2 — clipboard auto-clear, dark mode, responsive layout)
+
+| File / Area | What was implemented |
+|---|---|
+| `app/static/js/entry_detail.js` | `copyValue()` now shows a live "Clears in 30s" countdown on the button and calls `navigator.clipboard.writeText('')` after 30 s to wipe the clipboard; per-button `WeakMap` timers allow independent countdowns for username and password; clicking Copy again restarts the 30-second window |
+| `app/static/css/dark.css` | New file: `html.dark` CSS overrides for all key Tailwind utility classes (backgrounds, text, borders, inputs, buttons, table rows, dividers); applied when `dark_mode.js` adds the `dark` class to `<html>` |
+| `app/static/js/dark_mode.js` | New file: runs immediately on parse to apply saved preference before first paint (prevents white flash); toggles `dark` class on `<html>`; persists choice to `localStorage` under key `sv-dark-mode`; updates toggle button emoji (🌙 / ☀️) |
+| `app/templates/base.html` | Added `<link rel="stylesheet" href="/static/css/dark.css">` after Tailwind; added `<script src="/static/js/dark_mode.js">` (non-deferred, runs before paint); added fixed bottom-right `#dark-mode-toggle` button (`z-40`, below modals and timeout banner) that appears on every page |
+| `app/templates/vault.html` | Nav items now use `flex-wrap gap-2` so they wrap on small screens instead of overflowing; table wrapped in `<div class="overflow-x-auto">` for horizontal scroll on mobile; Website column and cells hidden on `< sm` with `hidden sm:table-cell` |
+| `app/templates/entry_detail.html` | Header row uses `flex-wrap` so Edit/Delete buttons stack below the title on narrow screens; field rows use `flex-wrap` + `min-w-0` so long usernames/websites break correctly; Copy buttons have `min-w-[4rem]` to prevent label-jump during countdown; Notes `<p>` has `break-words` |
+
 #### ❌ Still To Implement
 
 | Sub-task | Features |
 |---|---|
-| Sub-task 2 | Copy-to-clipboard with auto-clear; dark mode toggle (localStorage-persisted); responsive layout polish |
 | Sub-task 3 | `POST /vault/import` — KeePass XML + LastPass CSV; `GET /vault/export` — KeePass XML + LastPass CSV |
 
 ---

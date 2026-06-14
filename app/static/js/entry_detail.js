@@ -3,9 +3,8 @@
  *
  * Handles all interactive behaviour on the entry detail page:
  *   - Delete confirmation dialog
- *   - Copy username to clipboard
+ *   - Copy username / password to clipboard with auto-clear countdown
  *   - Password visibility toggle (show / hide)
- *   - Copy password to clipboard
  *
  * WHY A HIDDEN INPUT FOR THE PASSWORD
  * ------------------------------------
@@ -20,25 +19,90 @@
  * byte-for-byte.  Security is identical to the previous JS-literal approach —
  * the password is already in the HTML page in both cases.
  *
- * WHY data-copy FOR THE USERNAME
- * --------------------------------
- * The Copy button for the username previously used:
- *     onclick="copyValue({{ entry.username | tojson }}, this)"
- * Inline event handlers are also blocked by script-src 'self'.  We use a
- * data-copy attribute instead and read it in addEventListener.
+ * CLIPBOARD AUTO-CLEAR
+ * ---------------------
+ * After copying any value the clipboard is wiped after CLIPBOARD_CLEAR_SECS
+ * seconds.  A live countdown is shown on the button ("Clears in 28s") so the
+ * user knows when the sensitive value will be gone.  Clicking Copy again while
+ * a countdown is running restarts the timer from the beginning.
  */
+
+/** Seconds after which the clipboard is automatically cleared. */
+const CLIPBOARD_CLEAR_SECS = 30;
+
+// WeakMaps — per-button timer state. WeakMap keys are the button elements so
+// GC can collect entries if a button is ever removed from the DOM.
+/** @type {WeakMap<HTMLElement, ReturnType<typeof setTimeout>>} */
+const _clearTimers = new WeakMap();
+/** @type {WeakMap<HTMLElement, ReturnType<typeof setInterval>>} */
+const _countdownIntervals = new WeakMap();
+/** @type {WeakMap<HTMLElement, string>} */
+const _origLabels = new WeakMap();
+
+/**
+ * Copy `value` to the clipboard, then show a live countdown on `btn` and
+ * clear the clipboard when it reaches zero.
+ *
+ * Clicking while a countdown is already running restarts the 30-second window.
+ *
+ * @param {string} value - The string to copy.
+ * @param {HTMLElement} btn - The button element to update.
+ */
+function copyValue(value, btn) {
+  // Cancel any in-progress countdown for this button.
+  const existingClear    = _clearTimers.get(btn);
+  const existingInterval = _countdownIntervals.get(btn);
+  if (existingClear    !== undefined) clearTimeout(existingClear);
+  if (existingInterval !== undefined) clearInterval(existingInterval);
+
+  // Persist the original label so it can be restored after the countdown.
+  if (!_origLabels.has(btn)) {
+    _origLabels.set(btn, btn.textContent ?? 'Copy');
+  }
+  const orig = _origLabels.get(btn) ?? 'Copy';
+
+  navigator.clipboard.writeText(value).then(() => {
+    btn.classList.add('text-green-600');
+    let remaining = CLIPBOARD_CLEAR_SECS;
+    btn.textContent = `Clears in ${remaining}s`;
+
+    function tick() {
+      remaining--;
+      if (remaining > 0) {
+        btn.textContent = `Clears in ${remaining}s`;
+      } else {
+        clearInterval(_countdownIntervals.get(btn));
+      }
+    }
+    const intervalId = setInterval(tick, 1000);
+    _countdownIntervals.set(btn, intervalId);
+
+    function onExpire() {
+      clearInterval(intervalId);
+      navigator.clipboard.writeText('').catch(() => {});
+      btn.textContent = orig;
+      btn.classList.remove('text-green-600');
+      _clearTimers.delete(btn);
+      _countdownIntervals.delete(btn);
+    }
+    _clearTimers.set(btn, setTimeout(onExpire, CLIPBOARD_CLEAR_SECS * 1000));
+
+  }).catch(() => {
+    // Clipboard API unavailable (non-HTTPS, sandboxed iframe, or permission denied).
+    btn.textContent = 'Failed';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+}
 
 document.addEventListener('DOMContentLoaded', () => {
 
   // ── Read server-rendered password from the hidden input ─────────────────
-  // The hidden <input id="sv-password-value"> is rendered by entry_detail.html.
   const passwordInput = /** @type {HTMLInputElement|null} */ (
     document.getElementById('sv-password-value')
   );
   const _password = passwordInput ? passwordInput.value : '';
 
   // ── Delete confirmation ──────────────────────────────────────────────────
-  // Replaces: onsubmit="return confirm('Delete this entry? ...')"
   const deleteForm = document.getElementById('delete-form');
   if (deleteForm) {
     deleteForm.addEventListener('submit', (e) => {
@@ -48,28 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Copy-to-clipboard helper ─────────────────────────────────────────────
-  /**
-   * Write `value` to the clipboard and briefly show "Copied!" on `btn`.
-   *
-   * @param {string} value - The string to copy.
-   * @param {HTMLElement} btn - The button element to update.
-   */
-  function copyValue(value, btn) {
-    navigator.clipboard.writeText(value).then(() => {
-      const orig = btn.textContent;
-      btn.textContent = 'Copied!';
-      btn.classList.add('text-green-600');
-      setTimeout(() => {
-        btn.textContent = orig;
-        btn.classList.remove('text-green-600');
-      }, 1500);
-    });
-  }
-
   // ── Copy username ────────────────────────────────────────────────────────
-  // Replaces: onclick="copyValue({{ entry.username | tojson }}, this)"
-  // The username value is stored in data-copy on the button by the template.
   const copyUsernameBtn = document.getElementById('copy-username-btn');
   if (copyUsernameBtn) {
     copyUsernameBtn.addEventListener('click', function () {
@@ -78,7 +121,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Password toggle ──────────────────────────────────────────────────────
-  // Replaces: onclick="togglePassword()"
   const passwordDisplay = document.getElementById('password-display');
   const toggleBtn = document.getElementById('toggle-password-btn');
 
@@ -92,7 +134,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Copy password ────────────────────────────────────────────────────────
-  // Replaces: onclick="copyValue(_password, this)"
   const copyPasswordBtn = document.getElementById('copy-password-btn');
   if (copyPasswordBtn) {
     copyPasswordBtn.addEventListener('click', function () {
