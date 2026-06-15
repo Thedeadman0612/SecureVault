@@ -1,0 +1,114 @@
+/*
+ * app/static/css/dark.css
+ *
+ * Dark mode overrides. Applied by adding the `dark` class to <html>.
+ * Toggled by dark_mode.js; preference is persisted to localStorage.
+ *
+ * Using `html.dark` prefix gives higher specificity than Tailwind's
+ * single-class utilities, so !important is only used where the CDN
+ * generates a <style> element after this file in document order.
+ */
+
+/* ── Base ────────────────────────────────────────────────────────── */
+
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark body {
+  background-color: #0f1117 !important;
+  color: #e2e8f0;
+}
+
+/* ── Navigation ──────────────────────────────────────────────────── */
+
+html.dark nav {
+  background-color: #1a1f2e !important;
+  border-color: #2d3748 !important;
+}
+
+/* ── Backgrounds ─────────────────────────────────────────────────── */
+
+html.dark .bg-white        { background-color: #1a1f2e !important; }
+html.dark .bg-gray-50      { background-color: #131720 !important; }
+html.dark .bg-gray-100     { background-color: #242a38 !important; }
+html.dark .bg-gray-200     { background-color: #2d3748 !important; }
+html.dark .bg-indigo-50    { background-color: #1e2a4a !important; }
+html.dark .bg-red-50       { background-color: #2d1b1b !important; }
+
+/* ── Text ────────────────────────────────────────────────────────── */
+
+html.dark .text-gray-900   { color: #f1f5f9 !important; }
+html.dark .text-gray-700   { color: #cbd5e1 !important; }
+html.dark .text-gray-600   { color: #94a3b8 !important; }
+html.dark .text-gray-500   { color: #64748b !important; }
+html.dark .text-gray-400   { color: #4b5563 !important; }
+html.dark .text-gray-300   { color: #374151 !important; }
+html.dark .text-red-700    { color: #fca5a5 !important; }
+
+/* ── Borders ─────────────────────────────────────────────────────── */
+
+html.dark .border-gray-200 { border-color: #2d3748 !important; }
+html.dark .border-gray-300 { border-color: #374151 !important; }
+html.dark .border-gray-100 { border-color: #1f2937 !important; }
+html.dark .border-red-200  { border-color: #4a1f1f !important; }
+
+/* Divide lines inside tables and card sections */
+html.dark .divide-gray-100 > * + * { border-color: #1f2937 !important; }
+html.dark .divide-y        > * + * { border-color: #1f2937 !important; }
+
+/* ── Form controls ───────────────────────────────────────────────── */
+
+html.dark input[type="text"],
+html.dark input[type="password"],
+html.dark input[type="search"],
+html.dark input[type="email"],
+html.dark input[type="number"],
+html.dark input[type="range"],
+html.dark textarea,
+html.dark select {
+  background-color: #1a1f2e !important;
+  color: #e2e8f0 !important;
+  border-color: #374151 !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #4b5563 !important;
+}
+
+html.dark input[type="checkbox"] {
+  accent-color: #6366f1;
+}
+
+/* ── Gray buttons ────────────────────────────────────────────────── */
+
+html.dark .bg-gray-100.rounded-lg,
+html.dark button.bg-gray-100 {
+  background-color: #242a38 !important;
+  color: #94a3b8 !important;
+}
+
+html.dark .bg-gray-100.rounded-lg:hover,
+html.dark button.bg-gray-100:hover {
+  background-color: #2d3748 !important;
+}
+
+/* ── Table rows ──────────────────────────────────────────────────── */
+
+html.dark .hover\:bg-gray-50:hover { background-color: #1f2535 !important; }
+
+/* ── Strength bar background track ──────────────────────────────── */
+
+html.dark .bg-gray-200.rounded-full { background-color: #2d3748 !important; }
+
+/* ── Dark mode toggle button ─────────────────────────────────────── */
+
+html.dark #dark-mode-toggle {
+  background-color: #242a38;
+  color: #e2e8f0;
+}
+
+html.dark #dark-mode-toggle:hover {
+  background-color: #2d3748;
+}

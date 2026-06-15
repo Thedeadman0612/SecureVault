@@ -24,19 +24,19 @@
 <div class="max-w-2xl mx-auto px-4 py-8">
 
   {# Breadcrumb + title + actions #}
-  <div class="flex items-start justify-between mb-6 gap-4">
-    <div>
+  <div class="flex flex-wrap items-start justify-between mb-6 gap-3">
+    <div class="min-w-0">
       <a href="/vault" class="text-sm text-gray-400 hover:text-gray-600">← Vault</a>
-      <h1 class="text-xl font-semibold text-gray-900 mt-1 flex items-center gap-2">
-        {{ entry.title }}
+      <h1 class="text-xl font-semibold text-gray-900 mt-1 flex flex-wrap items-center gap-2">
+        <span class="break-all">{{ entry.title }}</span>
         {% if entry.category %}
-        <span class="px-2 py-0.5 text-xs rounded-full bg-indigo-50 text-indigo-700 font-medium">
+        <span class="px-2 py-0.5 text-xs rounded-full bg-indigo-50 text-indigo-700 font-medium whitespace-nowrap">
           {{ entry.category }}
         </span>
         {% endif %}
       </h1>
     </div>
-    <div class="flex items-center gap-2 shrink-0">
+    <div class="flex flex-wrap items-center gap-2 shrink-0">
       <a
         href="/entry/{{ entry.id }}/edit"
         class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
@@ -71,8 +71,8 @@
 
     {# Website #}
     {% if entry.website %}
-    <div class="px-6 py-4 flex items-center gap-4">
-      <span class="text-sm text-gray-500 w-28 shrink-0">Website</span>
+    <div class="px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-1">
+      <span class="text-sm text-gray-500 w-24 shrink-0">Website</span>
       {#
         Only prepend https:// if the stored value has no protocol yet.
         This handles: "github.com" → "https://github.com" ✅
@@ -94,9 +94,9 @@
 
     {# Username #}
     {% if entry.username %}
-    <div class="px-6 py-4 flex items-center gap-4">
-      <span class="text-sm text-gray-500 w-28 shrink-0">Username</span>
-      <span class="text-sm text-gray-900 font-mono flex-1 break-all">{{ entry.username }}</span>
+    <div class="px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-1">
+      <span class="text-sm text-gray-500 w-24 shrink-0">Username</span>
+      <span class="text-sm text-gray-900 font-mono flex-1 min-w-0 break-all">{{ entry.username }}</span>
       {#
         data-copy holds the username value for entry_detail.js to read.
         Jinja2 auto-escapes the value in HTML attribute context (" → &quot; etc.);
@@ -106,19 +106,19 @@
         type="button"
         id="copy-username-btn"
         data-copy="{{ entry.username }}"
-        class="shrink-0 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+        class="shrink-0 text-xs text-indigo-600 hover:text-indigo-800 font-medium min-w-[4rem] text-right"
       >
         Copy
       </button>
     </div>
     {% endif %}
 
-    {# Password — hidden by default; show/hide toggle + copy #}
-    <div class="px-6 py-4 flex items-center gap-4">
-      <span class="text-sm text-gray-500 w-28 shrink-0">Password</span>
+    {# Password — hidden by default; show/hide toggle + copy with auto-clear countdown #}
+    <div class="px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-1">
+      <span class="text-sm text-gray-500 w-24 shrink-0">Password</span>
       <span
         id="password-display"
-        class="text-sm text-gray-900 font-mono flex-1 tracking-widest select-none"
+        class="text-sm text-gray-900 font-mono flex-1 min-w-0 tracking-widest select-none"
       >
         ••••••••
       </span>
@@ -134,7 +134,7 @@
         <button
           type="button"
           id="copy-password-btn"
-          class="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+          class="text-xs text-indigo-600 hover:text-indigo-800 font-medium min-w-[4rem] text-right"
         >
           Copy
         </button>
@@ -145,7 +145,7 @@
     {% if entry.notes %}
     <div class="px-6 py-4">
       <span class="text-sm text-gray-500 block mb-2">Notes</span>
-      <p class="text-sm text-gray-900 whitespace-pre-wrap">{{ entry.notes }}</p>
+      <p class="text-sm text-gray-900 whitespace-pre-wrap break-words">{{ entry.notes }}</p>
     </div>
     {% endif %}
 
@@ -153,7 +153,7 @@
        them to the browser's local timezone via the data-utc attribute.
        format_datetime() output is the server-side fallback (shown briefly
        before JS runs, or if JS is disabled). #}
-    <div class="px-6 py-3 flex items-center justify-between text-xs text-gray-400 bg-gray-50 rounded-b-xl">
+    <div class="px-6 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-400 bg-gray-50 rounded-b-xl">
       <span>Added <time data-utc="{{ entry.created_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z">{{ format_datetime(entry.created_at) }}</time></span>
       <span>Updated <time data-utc="{{ entry.updated_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z">{{ format_datetime(entry.updated_at) }}</time></span>
     </div>

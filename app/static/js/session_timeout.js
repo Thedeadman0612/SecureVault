@@ -67,6 +67,12 @@
   }
 
   function logout() {
+    // Notify the server before navigating so the timeout is recorded in logs
+    // with the user_id. keepalive: true ensures the request completes even
+    // as the page unloads. Errors are silently ignored — logging is best-effort.
+    try {
+      fetch('/auth/timeout-notify', { method: 'GET', keepalive: true });
+    } catch (e) { /* ignore */ }
     window.location.href = '/login';
   }
 

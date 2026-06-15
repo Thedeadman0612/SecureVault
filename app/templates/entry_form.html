@@ -145,6 +145,22 @@
           Show
         </button>
       </div>
+      {# Strength indicator + generate link row #}
+      <div class="mt-1.5 flex items-start gap-3">
+        <div id="strength-bar-container" class="flex-1 hidden">
+          <div class="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+            <div id="strength-bar" class="h-full w-0 rounded-full transition-all duration-300"></div>
+          </div>
+          <p id="strength-label" class="text-xs mt-0.5 font-medium text-gray-500"></p>
+        </div>
+        <button
+          type="button"
+          id="generate-password-btn"
+          class="shrink-0 text-xs text-indigo-600 hover:text-indigo-800 font-medium whitespace-nowrap"
+        >
+          Generate password
+        </button>
+      </div>
       {% if is_edit %}
       <p class="text-xs text-gray-400 mt-1">Clear this field to keep the current password unchanged.</p>
       {% endif %}
@@ -183,10 +199,91 @@
     </div>
 
   </form>
+
 </div>
+
+{# Password Generator Modal — outside the form to avoid unintended form submission #}
+<div
+  id="password-generator-modal"
+  class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="gen-modal-title"
+>
+  <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
+    <div class="flex items-center justify-between mb-4">
+      <h3 id="gen-modal-title" class="text-base font-semibold text-gray-900">Password Generator</h3>
+      <button
+        type="button"
+        id="gen-close-btn"
+        class="text-gray-400 hover:text-gray-600 text-lg leading-none"
+        aria-label="Close generator"
+      >✕</button>
+    </div>
+
+    {# Generated password display #}
+    <div
+      id="generated-password-display"
+      class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-3 mb-4 font-mono
+             text-sm text-gray-800 break-all min-h-[3rem] flex items-center select-all"
+    >—</div>
+
+    {# Options #}
+    <div class="space-y-3 mb-5">
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label for="gen-length" class="text-sm text-gray-600">Length</label>
+          <span id="length-display" class="text-sm font-semibold text-gray-900">16</span>
+        </div>
+        <input
+          type="range"
+          id="gen-length"
+          min="8"
+          max="64"
+          value="16"
+          class="w-full accent-indigo-600"
+        >
+      </div>
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+        <input type="checkbox" id="gen-uppercase" checked class="accent-indigo-600">
+        Uppercase (A–Z)
+      </label>
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+        <input type="checkbox" id="gen-numbers" checked class="accent-indigo-600">
+        Numbers (0–9)
+      </label>
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+        <input type="checkbox" id="gen-symbols" checked class="accent-indigo-600">
+        Symbols (!@#$…)
+      </label>
+    </div>
+
+    {# Action buttons #}
+    <div class="grid grid-cols-2 gap-2">
+      <button
+        type="button"
+        id="gen-generate-btn"
+        class="py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg
+               hover:bg-indigo-700 transition-colors"
+      >
+        Regenerate
+      </button>
+      <button
+        type="button"
+        id="gen-use-btn"
+        class="py-2 bg-green-600 text-white text-sm font-medium rounded-lg
+               hover:bg-green-700 transition-colors"
+      >
+        Use Password
+      </button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
-  {# External file — inline scripts blocked by CSP's script-src 'self'. #}
+  {# External files — inline scripts blocked by CSP's script-src 'self'. #}
   <script src="/static/js/entry_form.js"></script>
+  <script src="/static/js/password_generator.js"></script>
 {% endblock %}

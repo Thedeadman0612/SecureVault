@@ -559,3 +559,29 @@ async def post_2fa_recovery(
         "User id=%d authenticated via recovery code — session promoted.", pending_user_id
     )
     return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_303_SEE_OTHER)
+
+
+# ---------------------------------------------------------------------------
+# Session diagnostic endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/auth/timeout-notify", response_class=Response)
+async def get_timeout_notify(request: Request) -> Response:
+    """Log a client-side inactivity timeout event and return 204.
+
+    Called by session_timeout.js (with keepalive: true) just before it
+    redirects the browser to /login. Because the JS timer fires while the
+    session is still momentarily valid, we can read user_id here and emit
+    a structured log entry that ties the redirect to a specific user — which
+    is otherwise invisible in the server logs.
+
+    This route is exempt from AuthGuard (see auth_guard.py _EXEMPT_EXACT)
+    so the notification still arrives even if the Fernet TTL expired at the
+    same moment the JS timer fired.
+    """
+    user_id: int | None = request.session.get("user_id")
+    logger.info(
+        "Client-side inactivity timeout fired — user_id=%s will be redirected to /login.",
+        user_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

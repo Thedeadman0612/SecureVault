@@ -44,6 +44,7 @@ SECURITY RULES (never violate):
 import logging
 
 from fastapi import HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.vault_entry import VaultEntry
@@ -220,26 +221,59 @@ def create_entry(
     return _decrypt_entry(entry, raw_key)
 
 
+def get_categories(user_id: int, db: Session) -> list[str]:
+    """Return sorted list of distinct non-null categories for a user.
+
+    Args:
+        user_id: Authenticated user's ID from session["user_id"].
+        db:      SQLAlchemy session.
+
+    Returns:
+        Alphabetically sorted list of category strings.
+    """
+    rows = (
+        db.query(VaultEntry.category)
+        .filter(VaultEntry.user_id == user_id, VaultEntry.category.isnot(None))
+        .distinct()
+        .all()
+    )
+    return sorted(row[0] for row in rows)
+
+
 def get_entries(
     user_id: int,
     raw_key: bytes,
     db: Session,
+    q: str | None = None,
+    category: str | None = None,
 ) -> list[VaultEntryResponse]:
-    """Return all vault entries for the authenticated user, decrypted.
+    """Return vault entries for the authenticated user, decrypted.
+
+    Optionally filters by a text query (title/website ilike) and/or by exact
+    category match. Both plaintext columns — no decryption needed to filter.
 
     Args:
-        user_id: Authenticated user's ID from session["user_id"].
-        raw_key: Raw 32-byte vault encryption key from the session.
-        db:      SQLAlchemy session.
+        user_id:  Authenticated user's ID from session["user_id"].
+        raw_key:  Raw 32-byte vault encryption key from the session.
+        db:       SQLAlchemy session.
+        q:        Optional text search against title and website (case-insensitive).
+        category: Optional exact category filter.
 
     Returns:
-        List of decrypted VaultEntryResponse objects. Empty list if none exist.
+        List of decrypted VaultEntryResponse objects. Empty list if none match.
     """
-    entries = (
-        db.query(VaultEntry)
-        .filter(VaultEntry.user_id == user_id)
-        .all()
-    )
+    query = db.query(VaultEntry).filter(VaultEntry.user_id == user_id)
+    if q:
+        pattern = f"%{q}%"
+        query = query.filter(
+            or_(
+                VaultEntry.title.ilike(pattern),
+                VaultEntry.website.ilike(pattern),
+            )
+        )
+    if category:
+        query = query.filter(VaultEntry.category == category)
+    entries = query.all()
     # Pass db so legacy "fernet" entries are lazily re-encrypted on first read.
     return [_decrypt_entry(e, raw_key, db=db) for e in entries]
 

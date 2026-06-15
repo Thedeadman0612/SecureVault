@@ -170,37 +170,17 @@ All security hardening files implemented and hardened through code review. See `
 
 ### Phase 3 — TOTP Two-Factor Authentication — Status: ✅ Complete
 
-> **Goal:** Add a second authentication factor so a stolen master password alone cannot unlock the vault.
-> TOTP (RFC 6238) is the industry standard — supported by Google Authenticator, Authy, 1Password, Bitwarden, etc.
-> 2FA is optional per-user: users who skip setup continue using password-only login.
+All TOTP 2FA files implemented and hardened through code review. See `spec.md §Phase 3` and git history for full details.
 
-#### ✅ Completed
-
-| File / Area | What was implemented |
-|---|---|
-| `requirements.txt` | Added `pyotp>=2.9` and `qrcode[pil]>=7.4` |
-| `app/models/user.py` | Added `totp_secret: Mapped[str \| None]` (NULL = 2FA disabled; AES-GCM encrypted) and `totp_enabled: Mapped[bool]` (default False); added `recovery_codes` relationship |
-| `app/models/recovery_code.py` | New `RecoveryCode` ORM model — `user_id` FK (CASCADE), `code_hash` (Argon2id), `used_at` (NULL = unused) |
-| `app/migrations/versions/d4e5f6a7b8c9_add_totp_2fa.py` | Alembic migration adding `totp_secret`, `totp_enabled` to `users` and creating `recovery_codes` table with index |
-| `app/security/totp.py` | New module: `generate_secret()`, `get_provisioning_uri()`, `verify_totp()`, `generate_recovery_codes()` (8 × 8-char codes via `secrets.token_urlsafe`), `hash_recovery_code()` (Argon2id), `verify_recovery_code()` |
-| `app/services/auth_service.py` | Added `enable_2fa()` (verifies first code, encrypts secret AES-GCM, stores 8 hashed recovery codes); `disable_2fa()` (clears secret, deletes codes); extended `login()` to return `True` when TOTP step required (sets `pending_user_id` + `pending_encryption_key`) |
-| `app/routes/auth.py` | Added `GET/POST /2fa/setup`, `GET/POST /2fa/verify`, `GET/POST /2fa/recovery`, `POST /2fa/disable`; updated `POST /login` to redirect to `/2fa/verify` when `requires_totp=True`; QR code generated server-side via `qrcode[pil]` |
-| `app/middleware/auth_guard.py` | Exempted `/2fa/verify` and `/2fa/recovery` from encryption-key check so mid-login users can reach the TOTP prompt |
-| `app/tests/test_totp.py` | 18 unit tests covering `generate_secret` format/randomness, `get_provisioning_uri` structure, `verify_totp` valid/invalid/wrong-secret, `generate_recovery_codes` count/length/uniqueness, `hash_recovery_code` Argon2id format, `verify_recovery_code` correct/wrong |
-| `app/templates/2fa_setup.html` | Three-state template: setup form with QR code + manual secret fallback + confirmation input; recovery codes display (shown once with save-now warning); optional disable button when 2FA already active |
-| `app/templates/2fa_verify.html` | 6-digit TOTP input form; "Use recovery code" link to `/2fa/recovery` |
-| `app/templates/2fa_recovery.html` | Recovery code text input form; "Use authenticator app" link back to `/2fa/verify` |
-| `app/tests/test_auth_routes.py` | 25 new 2FA integration tests across `TestLogin2FA`, `TestTotpVerify`, `TestRecoveryCodes`, `TestDisable2FA`; `_enable_2fa` helper with `generate_secret` mock; `client_2fa_enabled` and `client_2fa_pending` fixtures |
-
-> ⚠️ **TOTP secret storage:** The secret must be encrypted at rest — treat it like a vault credential. Use `encrypt_field_gcm(secret, encryption_key)` and store the ciphertext in `users.totp_secret`. Decrypt at login time the same way vault fields are decrypted. Never log the plaintext secret.
+> ⚠️ **TOTP secret storage:** Encrypted AES-GCM at rest in `users.totp_secret` — treat like a vault credential. Never log the plaintext secret.
 >
-> ⚠️ **Mid-login session state:** Use `session["pending_user_id"]` to track a user who has passed the password check but not yet the TOTP check. Clear this key on: TOTP success (replace with full session), TOTP failure after N attempts (lock), or any navigation away from `/2fa/verify`. `AuthGuard` must NOT grant access to the vault based on `pending_user_id` — only a fully established `encryption_key` in session grants access.
+> ⚠️ **Mid-login session state:** `session["pending_user_id"]` tracks a user past the password check but before TOTP. `AuthGuard` grants vault access only on a fully established `session["encryption_key"]` — never on `pending_user_id` alone.
 
 ---
 
-### Phase 4 — UX Improvements — Status: 🔴 Not Started
+### Phase 4 — UX Improvements — Status: ✅ Complete
 
-Search/filter, password generator, dark mode, clipboard auto-clear, password strength indicator, import/export (KeePass XML / LastPass CSV). See `spec.md §Phase 4` for full requirements.
+All UX improvement files implemented and hardened through code review. See `spec.md §Phase 4` and git history for full details.
 
 ---
 
