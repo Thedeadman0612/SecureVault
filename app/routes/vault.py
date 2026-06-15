@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.schemas.vault import VaultEntryCreate, VaultEntryUpdate
+from app.security.audit import log_event
 from app.services import import_export as import_export_svc
 from app.services import vault_service
 from app.templates_config import templates
@@ -224,6 +225,7 @@ async def post_import_vault(
             logger.warning("Skipped one entry during import for user id=%d.", user_id)
 
     logger.info("Import complete: %d entries created for user id=%d.", count, user_id)
+    log_event("entries_imported", user_id=user_id, count=count)
     return RedirectResponse(
         f"{_VAULT_URL}?imported={count}",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -268,6 +270,7 @@ async def get_export_vault(
         "Export: %d entries for user id=%d (format=%s).",
         len(entries), user_id, format,
     )
+    log_event("entries_exported", user_id=user_id, count=len(entries), format=format)
     return Response(
         content=content,
         media_type=media_type,

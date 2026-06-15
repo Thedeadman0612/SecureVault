@@ -199,12 +199,12 @@ pytest ≥80% coverage, Ruff zero violations, full type hints, structured loggin
 | `app/tests/test_vault_routes.py` | Integration tests for all vault routes (dashboard, import, export, create, detail, edit, delete) — `vault.py` now at 83% |
 | **Coverage total** | **88%** (up from 74.66% baseline; target ≥80% ✅) |
 | Full type hints (5.3) | Added missing return types to `database/session.py`, fixed `routes/auth.py` and `routes/vault.py` route return types (`-> Response` instead of narrow `HTMLResponse`/`RedirectResponse`); suppressed two framework false positives (`pydantic-settings` `call-arg`, Starlette ASGI `arg-type`); `mypy --ignore-missing-imports` now reports zero errors in production code |
+| Structured security audit logging (5.4) | New `app/security/audit.py` with `log_event(event, **fields)` emitting newline-delimited JSON; dedicated `logs/audit.log` handler configured in `main.py` (separate from `app.log`, `propagate=False`); 18 security events wired across `auth_service`, `vault_service`, `routes/auth`, `routes/vault` covering login success/failure, MFA pending, TOTP verify/fail/lockout, recovery code used/failed/lockout, logout, vault setup, entry CRUD, import/export — no passwords, keys, or decrypted values ever logged |
 
 #### ❌ Still To Implement
 
 | Deliverable | Description |
 |---|---|
-| Structured security audit logging (5.4) | Replace any remaining print statements; add dedicated audit log events for auth, 2FA, vault CRUD without leaking sensitive data |
 | `README.md` (5.5) | Complete README: setup instructions, feature list, architecture overview, screenshots placeholder |
 | `docs/architecture.md` (5.6) | Component diagram, request lifecycle, crypto design, 2FA mid-login state machine — plain-English reference |
 | `docs/threat_model.md` (5.7) | Assets, threats, mitigations, known limitations (server-side decryption, Python memory, TOTP replay window) |
