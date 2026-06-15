@@ -184,9 +184,30 @@ All UX improvement files implemented and hardened through code review. See `spec
 
 ---
 
-### Phase 5 — Engineering Quality — Status: 🔴 Not Started
+### Phase 5 — Engineering Quality — Status: 🟡 In Progress
 
 pytest ≥80% coverage, Ruff zero violations, full type hints, structured logging, README, `docs/architecture.md`, `docs/threat_model.md`. See `spec.md §Phase 5`.
+
+#### ✅ Completed
+
+| File / Deliverable | What was implemented |
+|---|---|
+| `pytest-cov` + `.coveragerc` | Coverage tooling installed; `.coveragerc` configures source, omit patterns (tests, migrations), and `fail_under=80` |
+| `requirements.txt` | Added `pytest-cov>=7.1.0` |
+| `app/tests/test_helpers.py` | Unit tests for `none_if_empty`, `format_datetime`, `truncate` — `helpers.py` now at 100% |
+| `app/tests/test_import_export.py` | Unit tests for `parse_keepass_xml`, `parse_lastpass_csv`, `build_keepass_xml`, `build_lastpass_csv` — `import_export.py` now at 95% |
+| `app/tests/test_vault_routes.py` | Integration tests for all vault routes (dashboard, import, export, create, detail, edit, delete) — `vault.py` now at 83% |
+| **Coverage total** | **88%** (up from 74.66% baseline; target ≥80% ✅) |
+
+#### ❌ Still To Implement
+
+| Deliverable | Description |
+|---|---|
+| Full type hints (5.3) | Add `-> return_type` and parameter annotations to all public functions/classes across every module |
+| Structured security audit logging (5.4) | Replace any remaining print statements; add dedicated audit log events for auth, 2FA, vault CRUD without leaking sensitive data |
+| `README.md` (5.5) | Complete README: setup instructions, feature list, architecture overview, screenshots placeholder |
+| `docs/architecture.md` (5.6) | Component diagram, request lifecycle, crypto design, 2FA mid-login state machine — plain-English reference |
+| `docs/threat_model.md` (5.7) | Assets, threats, mitigations, known limitations (server-side decryption, Python memory, TOTP replay window) |
 
 ---
 
