@@ -14,7 +14,6 @@ and self-contained. Covers:
   build_lastpass_csv — header row present, data rows correct, empty list
 """
 
-import io
 from datetime import datetime, timezone
 
 import pytest
@@ -22,7 +21,6 @@ import pytest
 from app.schemas.vault import VaultEntryResponse
 from app.services.import_export import (
     ImportError,
-    ImportedEntry,
     build_keepass_xml,
     build_lastpass_csv,
     parse_keepass_xml,
@@ -37,17 +35,17 @@ from app.services.import_export import (
 def _make_response(**kwargs) -> VaultEntryResponse:
     """Build a minimal VaultEntryResponse for export tests."""
     now = datetime.now(timezone.utc)
-    defaults = dict(
-        id=1,
-        title="Example",
-        website=None,
-        category=None,
-        username="user",
-        password="pass",
-        notes=None,
-        created_at=now,
-        updated_at=now,
-    )
+    defaults = {
+        "id": 1,
+        "title": "Example",
+        "website": None,
+        "category": None,
+        "username": "user",
+        "password": "pass",  # NOSONAR — test fixture value, not a real credential
+        "notes": None,
+        "created_at": now,
+        "updated_at": now,
+    }
     defaults.update(kwargs)
     return VaultEntryResponse(**defaults)
 
@@ -65,7 +63,7 @@ def _keepass_xml(groups: str) -> bytes:
 </KeePassFile>""".encode()
 
 
-def _entry_xml(title="Gmail", username="user@gmail.com", password="s3cr3t",
+def _entry_xml(title="Gmail", username="user@gmail.com", password="s3cr3t",  # NOSONAR — test fixture
                url="https://gmail.com", notes="my notes") -> str:
     return f"""<Entry>
       <String><Key>Title</Key><Value>{title}</Value></String>
@@ -232,7 +230,7 @@ class TestBuildKeepassXml:
         assert result.startswith(b"<?xml")
 
     def test_entry_appears_in_output(self):
-        entry = _make_response(title="GitHub", username="alice", password="s3cr3t")
+        entry = _make_response(title="GitHub", username="alice", password="s3cr3t")  # NOSONAR
         result = build_keepass_xml([entry])
         xml_text = result.decode("utf-8")
         assert "GitHub" in xml_text
@@ -292,7 +290,7 @@ class TestBuildLastpassCsv:
             title="GitHub",
             website="https://github.com",
             username="alice",
-            password="s3cr3t",
+            password="s3cr3t",  # NOSONAR — test fixture value, not a real credential
             notes="dev account",
             category="Dev",
         )

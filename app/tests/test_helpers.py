@@ -11,9 +11,7 @@ Covers all three utility functions:
 
 from datetime import datetime, timezone
 
-import pytest
-
-from app.utils.helpers import first_validation_error, format_datetime, none_if_empty, truncate
+from app.utils.helpers import format_datetime, none_if_empty, truncate
 
 
 class TestNoneIfEmpty:

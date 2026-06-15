@@ -96,7 +96,7 @@ def _raw_key_from_session(session: dict) -> bytes:
 # ---------------------------------------------------------------------------
 
 @router.get("/setup", response_class=HTMLResponse)
-async def get_setup(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+async def get_setup(request: Request, db: Session = Depends(get_db)) -> Response:
     """Render the first-time vault setup form.
 
     Redirects to /login if the vault has already been initialised (a User row
@@ -113,7 +113,7 @@ async def post_setup(
     password: str = Form(...),
     confirm_password: str = Form(...),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     """Create the vault user and redirect to /login on success.
 
     Validates the form data with SetupRequest, then delegates to
@@ -165,7 +165,7 @@ async def post_setup(
 # ---------------------------------------------------------------------------
 
 @router.get("/login", response_class=HTMLResponse)
-async def get_login(request: Request) -> HTMLResponse:
+async def get_login(request: Request) -> Response:
     """Render the login form.
 
     Redirects to /vault if the user is already authenticated (encryption_key
@@ -183,7 +183,7 @@ async def post_login(
     request: Request,
     password: str = Form(...),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     """Verify the master password, derive the encryption key, redirect to /vault.
 
     Delegates to auth_service.login(), which writes encryption_key and user_id

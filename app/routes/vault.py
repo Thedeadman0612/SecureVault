@@ -113,7 +113,7 @@ async def get_vault(
     imported: int | None = Query(default=None),
     import_error: str | None = Query(default=None),
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Render the vault dashboard with filtered, decrypted entries.
 
     Accepts optional `q` (title/website text search) and `category` (exact
@@ -280,7 +280,7 @@ async def get_export_vault(
 # ---------------------------------------------------------------------------
 
 @router.get("/entry/new", response_class=HTMLResponse)
-async def get_new_entry(request: Request) -> HTMLResponse:
+async def get_new_entry(request: Request) -> Response:
     """Render the blank entry creation form.
 
     Passes `entry=None` and `action="/entry/new"` so the shared
@@ -368,7 +368,7 @@ async def get_entry(
     request: Request,
     entry_id: int,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Render the detail view for a single vault entry.
 
     Passes the decrypted VaultEntryResponse to the template under `entry`.
@@ -401,7 +401,7 @@ async def get_edit_entry(
     request: Request,
     entry_id: int,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Render the edit form pre-filled with the existing entry's values.
 
     Passes the decrypted entry and `action="/entry/{id}/edit"` so the shared

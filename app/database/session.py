@@ -1,5 +1,8 @@
+from collections.abc import Generator
+from typing import Any
+
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config.settings import settings
 
@@ -41,7 +44,7 @@ engine = create_engine(
 
 
 @event.listens_for(engine, "connect")
-def _set_sqlite_pragmas(dbapi_connection, _connection_record):
+def _set_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
     """Apply WAL mode and NORMAL sync on every new SQLite connection."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
@@ -52,7 +55,7 @@ def _set_sqlite_pragmas(dbapi_connection, _connection_record):
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
-def get_db():
+def get_db() -> Generator[Session, None, None]:
     """Yield a SQLAlchemy session and guarantee cleanup on every exit path.
 
     On a normal request the caller commits before returning; the session is
