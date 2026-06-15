@@ -184,30 +184,9 @@ All UX improvement files implemented and hardened through code review. See `spec
 
 ---
 
-### Phase 5 — Engineering Quality — Status: 🟡 In Progress
+### Phase 5 — Engineering Quality — Status: ✅ Complete
 
-pytest ≥80% coverage, Ruff zero violations, full type hints, structured logging, README, `docs/architecture.md`, `docs/threat_model.md`. See `spec.md §Phase 5`.
-
-#### ✅ Completed
-
-| File / Deliverable | What was implemented |
-|---|---|
-| `pytest-cov` + `.coveragerc` | Coverage tooling installed; `.coveragerc` configures source, omit patterns (tests, migrations), and `fail_under=80` |
-| `requirements.txt` | Added `pytest-cov>=7.1.0` |
-| `app/tests/test_helpers.py` | Unit tests for `none_if_empty`, `format_datetime`, `truncate` — `helpers.py` now at 100% |
-| `app/tests/test_import_export.py` | Unit tests for `parse_keepass_xml`, `parse_lastpass_csv`, `build_keepass_xml`, `build_lastpass_csv` — `import_export.py` now at 95%; SonarQube S7498 (dict literal) and S2068 (hardcoded credential false positives) suppressed with `# NOSONAR` |
-| `app/tests/test_vault_routes.py` | Integration tests for all vault routes (dashboard, import, export, create, detail, edit, delete) — `vault.py` now at 83% |
-| **Coverage total** | **88%** (up from 74.66% baseline; target ≥80% ✅) |
-| Full type hints (5.3) | Added missing return types to `database/session.py`, fixed `routes/auth.py` and `routes/vault.py` route return types (`-> Response` instead of narrow `HTMLResponse`/`RedirectResponse`); suppressed two framework false positives (`pydantic-settings` `call-arg`, Starlette ASGI `arg-type`); `mypy --ignore-missing-imports` now reports zero errors in production code |
-| Structured security audit logging (5.4) | New `app/security/audit.py` with `log_event(event, **fields)` emitting newline-delimited JSON; dedicated `logs/audit.log` handler configured in `main.py` (separate from `app.log`, `propagate=False`); 18 security events wired across `auth_service`, `vault_service`, `routes/auth`, `routes/vault` covering login success/failure, MFA pending, TOTP verify/fail/lockout, recovery code used/failed/lockout, logout, vault setup, entry CRUD, import/export — no passwords, keys, or decrypted values ever logged |
-| `README.md` (5.5) | Full project README: feature list, tech stack table, quick-start (clone → venv → install → .env → migrate → run), first-use guide, screenshots placeholder table, all dev commands, project structure tree, security architecture (encryption, KDF, session, known limitations, audit logging), test coverage note, phase status table |
-| `docs/architecture.md` (5.6) | 13-section plain-English engineering reference: system overview, component diagram, fully-annotated request lifecycle, middleware stack with rationale, master-password end-to-end journey (setup → login → session → logout → attacker scenario), full crypto design (password hashing / KDF / AES-256-GCM token format / session cookie Fernet+HKDF / CSRF token generation — all with diagrams and WHY), attack prevention deep-dive (XSS, CSRF, clickjacking, MIME sniffing, protocol downgrade, SQL injection, brute-force, session hijacking — each with attack example and exact defence), security headers explained (CSP, X-Frame-Options, X-Content-Type-Options, HSTS), 2FA state machine (TOTP + recovery code paths + lockout), ER schema, full module map, security decision rationale, key invariants — all jargon defined inline at first use |
-
-#### ❌ Still To Implement
-
-| Deliverable | Description |
-|---|---|
-| `docs/threat_model.md` (5.7) | Assets, threats, mitigations, known limitations (server-side decryption, Python memory, TOTP replay window) |
+All engineering quality deliverables implemented. See `spec.md §Phase 5` and git history for full details.
 
 ---
 
