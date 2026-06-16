@@ -40,6 +40,7 @@ from app.database.session import get_db
 from app.models.recovery_code import RecoveryCode
 from app.models.user import User
 from app.schemas.auth import LoginRequest, SetupRequest
+from app.security.audit import log_event
 from app.security.encryption import InvalidToken, decrypt_field_gcm
 from app.security.totp import generate_secret, get_provisioning_uri, verify_recovery_code, verify_totp
 from app.services import auth_service
@@ -75,6 +76,11 @@ _MAX_RECOVERY_ATTEMPTS: int = 5
 # ---------------------------------------------------------------------------
 
 
+def _client_ip(request: Request) -> str:
+    """Extract the client IP address from the request, or 'unknown' if absent."""
+    return request.client.host if request.client else "unknown"
+
+
 def _make_qr_b64(uri: str) -> str:
     """Generate a QR code image for *uri* and return it as a base64 PNG string.
 
@@ -96,7 +102,7 @@ def _raw_key_from_session(session: dict) -> bytes:
 # ---------------------------------------------------------------------------
 
 @router.get("/setup", response_class=HTMLResponse)
-async def get_setup(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+async def get_setup(request: Request, db: Session = Depends(get_db)) -> Response:
     """Render the first-time vault setup form.
 
     Redirects to /login if the vault has already been initialised (a User row
@@ -113,7 +119,7 @@ async def post_setup(
     password: str = Form(...),
     confirm_password: str = Form(...),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     """Create the vault user and redirect to /login on success.
 
     Validates the form data with SetupRequest, then delegates to
@@ -165,7 +171,7 @@ async def post_setup(
 # ---------------------------------------------------------------------------
 
 @router.get("/login", response_class=HTMLResponse)
-async def get_login(request: Request) -> HTMLResponse:
+async def get_login(request: Request) -> Response:
     """Render the login form.
 
     Redirects to /vault if the user is already authenticated (encryption_key
@@ -183,7 +189,7 @@ async def post_login(
     request: Request,
     password: str = Form(...),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     """Verify the master password, derive the encryption key, redirect to /vault.
 
     Delegates to auth_service.login(), which writes encryption_key and user_id
@@ -208,6 +214,7 @@ async def post_login(
             # Wrong password or no vault — return identical generic message
             # so the response does not reveal whether a vault exists.
             logger.warning("Login attempt failed — invalid password.")
+            log_event("login_failed", ip=_client_ip(request))
             return templates.TemplateResponse(
                 request, _LOGIN_TEMPLATE,
                 {"error": "Invalid password."},
@@ -427,6 +434,7 @@ async def post_2fa_verify(
                 "TOTP attempt limit reached for pending user id=%d — wiping session.",
                 pending_user_id,
             )
+            log_event("totp_lockout", user_id=pending_user_id)
             request.session.clear()
             request.session["flash_error"] = "Too many incorrect codes. Please log in again."
             return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
@@ -436,6 +444,7 @@ async def post_2fa_verify(
             _MAX_TOTP_ATTEMPTS,
             pending_user_id,
         )
+        log_event("totp_failed", user_id=pending_user_id, attempt=attempts, max=_MAX_TOTP_ATTEMPTS)
         request.session["totp_attempts"] = attempts
         return templates.TemplateResponse(
             request,
@@ -449,6 +458,7 @@ async def post_2fa_verify(
     request.session["encryption_key"] = pending_key_b64
     request.session["user_id"] = pending_user_id
     logger.info("User id=%d completed TOTP verification — session promoted.", pending_user_id)
+    log_event("totp_verified", user_id=pending_user_id)
     return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -505,6 +515,7 @@ async def post_2fa_recovery(
             "Recovery code attempt limit reached for pending user id=%d — wiping session.",
             pending_user_id,
         )
+        log_event("recovery_code_lockout", user_id=pending_user_id)
         request.session.clear()
         request.session["flash_error"] = "Too many incorrect codes. Please log in again."
         return RedirectResponse(url=_LOGIN_URL, status_code=status.HTTP_302_FOUND)
@@ -531,6 +542,7 @@ async def post_2fa_recovery(
             _MAX_RECOVERY_ATTEMPTS,
             pending_user_id,
         )
+        log_event("recovery_code_failed", user_id=pending_user_id, attempt=recovery_attempts, max=_MAX_RECOVERY_ATTEMPTS)
         request.session["recovery_attempts"] = recovery_attempts
         return templates.TemplateResponse(
             request,
@@ -558,6 +570,7 @@ async def post_2fa_recovery(
     logger.info(
         "User id=%d authenticated via recovery code — session promoted.", pending_user_id
     )
+    log_event("recovery_code_used", user_id=pending_user_id)
     return RedirectResponse(url=_VAULT_URL, status_code=status.HTTP_303_SEE_OTHER)
 
 

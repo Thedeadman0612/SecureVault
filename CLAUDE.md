@@ -184,9 +184,9 @@ All UX improvement files implemented and hardened through code review. See `spec
 
 ---
 
-### Phase 5 — Engineering Quality — Status: 🔴 Not Started
+### Phase 5 — Engineering Quality — Status: ✅ Complete
 
-pytest ≥80% coverage, Ruff zero violations, full type hints, structured logging, README, `docs/architecture.md`, `docs/threat_model.md`. See `spec.md §Phase 5`.
+All engineering quality deliverables implemented. See `spec.md §Phase 5` and git history for full details.
 
 ---
 

@@ -75,8 +75,8 @@ from app.routes import auth, vault
 # self-contained when tailing the file:
 #   2024-06-06 14:32:01,123 WARNING  app.middleware.rate_limit — Login lockout triggered …
 #
-# Phase 4 will replace this with structured JSON logging and a dedicated
-# security-audit stream (separate file, never mixed with debug output).
+# Phase 5.4 adds a dedicated security-audit stream (securevault.audit logger)
+# writing structured JSON to logs/audit.log, separate from debug output.
 
 _LOG_DIR = Path(__file__).parent.parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
@@ -111,6 +111,21 @@ logging.getLogger("watchfiles").setLevel(logging.WARNING)
 # (e.g. "on_field_data with data[176:193]") — useless for app debugging and
 # mildly sensitive (annotates byte positions of form fields including passwords).
 logging.getLogger("python_multipart").setLevel(logging.WARNING)
+
+# Security audit logger — writes structured JSON to logs/audit.log, separate
+# from app.log. propagate=False keeps audit records out of app.log (no double-
+# logging). The %(message)s-only formatter yields pure JSON lines, one per event.
+_audit_handler = logging.handlers.RotatingFileHandler(
+    _LOG_DIR / "audit.log",
+    maxBytes=10 * 1024 * 1024,   # 10 MB
+    backupCount=10,
+    encoding="utf-8",
+)
+_audit_handler.setFormatter(logging.Formatter("%(message)s"))
+_audit_logger = logging.getLogger("securevault.audit")
+_audit_logger.addHandler(_audit_handler)
+_audit_logger.setLevel(logging.INFO)
+_audit_logger.propagate = False
 
 logger = logging.getLogger(__name__)
 

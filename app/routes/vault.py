@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.schemas.vault import VaultEntryCreate, VaultEntryUpdate
+from app.security.audit import log_event
 from app.services import import_export as import_export_svc
 from app.services import vault_service
 from app.templates_config import templates
@@ -113,7 +114,7 @@ async def get_vault(
     imported: int | None = Query(default=None),
     import_error: str | None = Query(default=None),
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Render the vault dashboard with filtered, decrypted entries.
 
     Accepts optional `q` (title/website text search) and `category` (exact
@@ -224,6 +225,7 @@ async def post_import_vault(
             logger.warning("Skipped one entry during import for user id=%d.", user_id)
 
     logger.info("Import complete: %d entries created for user id=%d.", count, user_id)
+    log_event("entries_imported", user_id=user_id, count=count)
     return RedirectResponse(
         f"{_VAULT_URL}?imported={count}",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -268,6 +270,7 @@ async def get_export_vault(
         "Export: %d entries for user id=%d (format=%s).",
         len(entries), user_id, format,
     )
+    log_event("entries_exported", user_id=user_id, count=len(entries), format=format)
     return Response(
         content=content,
         media_type=media_type,
@@ -280,7 +283,7 @@ async def get_export_vault(
 # ---------------------------------------------------------------------------
 
 @router.get("/entry/new", response_class=HTMLResponse)
-async def get_new_entry(request: Request) -> HTMLResponse:
+async def get_new_entry(request: Request) -> Response:
     """Render the blank entry creation form.
 
     Passes `entry=None` and `action="/entry/new"` so the shared
@@ -368,7 +371,7 @@ async def get_entry(
     request: Request,
     entry_id: int,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Render the detail view for a single vault entry.
 
     Passes the decrypted VaultEntryResponse to the template under `entry`.
@@ -401,7 +404,7 @@ async def get_edit_entry(
     request: Request,
     entry_id: int,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Render the edit form pre-filled with the existing entry's values.
 
     Passes the decrypted entry and `action="/entry/{id}/edit"` so the shared

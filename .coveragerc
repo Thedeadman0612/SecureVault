@@ -1,0 +1,10 @@
+[run]
+source = app
+omit =
+    app/tests/*
+    app/migrations/*
+
+[report]
+show_missing = true
+skip_covered = false
+fail_under = 80

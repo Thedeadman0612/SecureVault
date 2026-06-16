@@ -40,6 +40,7 @@ from app.models.user import User
 from app.security.encryption import derive_key, encrypt_field_gcm, generate_kdf_salt
 from app.security.hashing import hash_password, needs_rehash, verify_password
 from app.security.totp import generate_recovery_codes, hash_recovery_code, verify_totp
+from app.security.audit import log_event
 from app.utils.helpers import utcnow
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ def setup_vault(password: str, db: Session) -> User:
         )
     db.refresh(user)
     logger.info("Vault initialised — user id=%d created.", user.id)
+    log_event("vault_setup", user_id=user.id)
     return user
 
 
@@ -175,12 +177,14 @@ def login(password: str, db: Session, session: dict) -> bool:
         session["pending_user_id"] = user.id
         session["pending_encryption_key"] = key_b64
         logger.info("User id=%d passed password check; awaiting TOTP.", user.id)
+        log_event("login_mfa_pending", user_id=user.id)
         return True
 
     # 2FA not enabled — complete the session immediately.
     session["encryption_key"] = key_b64
     session["user_id"] = user.id
     logger.info("User id=%d logged in.", user.id)
+    log_event("login_success", user_id=user.id)
     return False
 
 
@@ -193,8 +197,10 @@ def logout(session: dict) -> None:
     Args:
         session: Starlette session dict (request.session). Cleared in place.
     """
+    user_id: int | None = session.get("user_id")
     session.clear()
     logger.info("Session cleared — user logged out.")
+    log_event("logout", user_id=user_id)
 
 
 def enable_2fa(
@@ -265,6 +271,7 @@ def enable_2fa(
             detail="Failed to enable 2FA. Please try again.",
         )
     logger.info("2FA enabled for user id=%d; %d recovery codes issued.", user_id, len(codes))
+    log_event("totp_enabled", user_id=user_id, recovery_codes_issued=len(codes))
     return codes
 
 
@@ -299,3 +306,4 @@ def disable_2fa(user_id: int, db: Session) -> None:
             detail="Failed to disable 2FA. Please try again.",
         )
     logger.info("2FA disabled for user id=%d.", user_id)
+    log_event("totp_disabled", user_id=user_id)

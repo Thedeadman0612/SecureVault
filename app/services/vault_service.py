@@ -49,6 +49,7 @@ from sqlalchemy.orm import Session
 
 from app.models.vault_entry import VaultEntry
 from app.schemas.vault import VaultEntryCreate, VaultEntryResponse, VaultEntryUpdate
+from app.security.audit import log_event
 from app.security.encryption import InvalidToken, get_cipher
 
 logger = logging.getLogger(__name__)
@@ -218,6 +219,7 @@ def create_entry(
         raise
     db.refresh(entry)
     logger.info("Created vault entry id=%d for user id=%d.", entry.id, user_id)
+    log_event("entry_created", user_id=user_id, entry_id=entry.id)
     return _decrypt_entry(entry, raw_key)
 
 
@@ -393,6 +395,7 @@ def update_entry(
         raise
     db.refresh(entry)
     logger.info("Updated vault entry id=%d for user id=%d.", entry.id, user_id)
+    log_event("entry_updated", user_id=user_id, entry_id=entry.id)
     # Pass db so _decrypt_entry() lazily upgrades any 'fernet' row to 'aesgcm'
     # after the update — all three sensitive fields are upgraded atomically.
     return _decrypt_entry(entry, raw_key, db=db)
@@ -435,3 +438,4 @@ def delete_entry(
         logger.exception("DB commit failed while deleting vault entry id=%d for user id=%d.", entry_id, user_id)
         raise
     logger.info("Deleted vault entry id=%d for user id=%d.", entry_id, user_id)
+    log_event("entry_deleted", user_id=user_id, entry_id=entry_id)

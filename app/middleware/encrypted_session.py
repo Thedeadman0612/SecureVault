@@ -206,7 +206,7 @@ class EncryptedSessionMiddleware:
 
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+        await self.app(scope, receive, send_wrapper)  # type: ignore[arg-type]  # Starlette Send variance
 
     # ------------------------------------------------------------------
     # Session load / cookie helpers
