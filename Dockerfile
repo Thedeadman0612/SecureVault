@@ -52,7 +52,7 @@ COPY docker/entrypoint.sh ./entrypoint.sh
 # a build cache.
 RUN rm -rf ./app/tests \
     && find . -name "__pycache__" -type d -prune -exec rm -rf {} + \
-    && mkdir -p /app/logs \
+    && mkdir -p /app/logs /app/data \
     && chmod +x ./entrypoint.sh \
     && chown -R appuser:appuser /app
 

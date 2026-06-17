@@ -1,0 +1,41 @@
+# Brings up the full SecureVault stack from a cold machine:
+#   docker compose up --build
+#
+# WHY NAMED VOLUMES INSTEAD OF BIND-MOUNTING ./securevault.db DIRECTLY
+# ----------------------------------------------------------------------
+# Docker only auto-creates a host-side bind mount when the source is a
+# directory. If ./securevault.db doesn't exist yet on a fresh clone, Docker
+# silently creates a *directory* at that path instead of a file, which then
+# breaks SQLite. Named volumes sidestep this entirely — Docker initialises
+# them from the image's /app/data contents (including ownership) on first
+# run, so they work identically on a fresh clone, on a CI runner, and on a
+# developer's machine, regardless of host OS or host UID.
+#
+# DATABASE_URL is overridden here (not just left at the .env default of
+# ./securevault.db) so the database lives in the dedicated, volume-backed
+# /app/data directory — completely separate from the project root, so a
+# concurrently running `uvicorn --reload` dev process never shares (and
+# never lock-contends on) the same SQLite file as the container.
+#
+# Inspecting the data:
+#   docker compose exec app sqlite3 /app/data/securevault.db ".tables"
+#   docker compose exec app tail -f /app/logs/audit.log
+
+services:
+  app:
+    build: .
+    image: securevault:latest
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/securevault.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - securevault_data:/app/data
+      - securevault_logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  securevault_data:
+  securevault_logs:

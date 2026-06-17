@@ -204,12 +204,12 @@ Dockerfile, docker-compose, GitHub Actions CI, pip-audit, AWS EC2 t3.micro (ngin
 | `docker/entrypoint.sh` (6.1) | Runs `alembic upgrade head` before handing off to the container `CMD` — idempotent, so the SQLite schema is always current on a fresh volume |
 | `.dockerignore` (6.1) | Excludes venv, `.env`, `*.db*`, `logs/`, caches, docs, and `app/tests/` from the build context |
 | `app/services/import_export.py` (bug fix found via Docker testing) | `_walk_keepass_group` type annotation referenced `ET.Element` (the `defusedxml` alias, which deliberately does not export `Element`). Worked locally only because the dev venv runs Python 3.14 (PEP 749 defers annotation evaluation); crashed immediately under Python 3.13 in the container. Fixed by pointing the annotation at the existing `StdET` (stdlib `xml.etree.ElementTree`) alias already used elsewhere in the file for safe XML construction. `pytest`/`ruff` re-verified green after the fix. |
+| `docker-compose.yml` (6.2) | Full local stack via `docker compose up --build`; named volumes (`securevault_data`, `securevault_logs`) for `/app/data` and `/app/logs` instead of bind mounts, avoiding the "missing file becomes a directory" and host/container UID footguns; `env_file: .env` for secrets, `DATABASE_URL` overridden to the volume-backed path; verified end-to-end including a full container restart — migrations replay idempotently, `securevault.db`/`audit.log` persist with correct `appuser` ownership, `/setup` returns 200 after restart |
 
 #### ❌ Still To Implement
 
 | Sub-task | Description |
 |---|---|
-| 6.2 | docker-compose for full local stack (volume mounts for `securevault.db`, `logs/`) |
 | 6.3 | GitHub Actions CI pipeline (pytest, ruff, pip-audit on every push) |
 | 6.4 | Dependency + secret scanning (pip-audit, Trufflehog) wired into CI |
 | 6.5 | Container hardening review (read-only filesystem where possible) |
