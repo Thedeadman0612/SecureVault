@@ -190,11 +190,39 @@ All engineering quality deliverables implemented. See `spec.md §Phase 5` and gi
 
 ---
 
-### Phase 6 — DevSecOps + Cloud Deployment — Status: 🔴 Not Started
+### Phase 6 — DevSecOps + Cloud Deployment — Status: 🟡 In Progress
 
 Dockerfile, docker-compose, GitHub Actions CI, pip-audit, AWS EC2 t3.micro (nginx + certbot + systemd), EBS volume for DB, nightly S3 backup. Then codify the same infra in **Terraform** (`terraform/`) with remote state in S3 + DynamoDB lock. See `spec.md §Phase 6` for the full two-step approach.
 
 > ⚠️ **Rate limiter and reverse proxy:** When nginx is in front, `request.client.host` is the proxy's IP. Update `LoginRateLimitMiddleware` to read `X-Forwarded-For` only when `ENVIRONMENT=production`.
+
+#### ✅ Completed
+
+| File / Deliverable | What was implemented |
+|---|---|
+| `Dockerfile` (6.1) | Multi-stage build (`python:3.13-slim`); builder stage installs deps to user site-packages; final stage runs as non-root `appuser`; test suite stripped from final image; verified by building, running, and curling the container — `/setup` returns 200 with full CSP/HSTS/X-Frame-Options headers, process confirmed non-root, DB/logs created with correct ownership |
+| `docker/entrypoint.sh` (6.1) | Runs `alembic upgrade head` before handing off to the container `CMD` — idempotent, so the SQLite schema is always current on a fresh volume |
+| `.dockerignore` (6.1) | Excludes venv, `.env`, `*.db*`, `logs/`, caches, docs, and `app/tests/` from the build context |
+| `app/services/import_export.py` (bug fix found via Docker testing) | `_walk_keepass_group` type annotation referenced `ET.Element` (the `defusedxml` alias, which deliberately does not export `Element`). Worked locally only because the dev venv runs Python 3.14 (PEP 749 defers annotation evaluation); crashed immediately under Python 3.13 in the container. Fixed by pointing the annotation at the existing `StdET` (stdlib `xml.etree.ElementTree`) alias already used elsewhere in the file for safe XML construction. `pytest`/`ruff` re-verified green after the fix. |
+
+#### ❌ Still To Implement
+
+| Sub-task | Description |
+|---|---|
+| 6.2 | docker-compose for full local stack (volume mounts for `securevault.db`, `logs/`) |
+| 6.3 | GitHub Actions CI pipeline (pytest, ruff, pip-audit on every push) |
+| 6.4 | Dependency + secret scanning (pip-audit, Trufflehog) wired into CI |
+| 6.5 | Container hardening review (read-only filesystem where possible) |
+| 6.6 | `GET /health` endpoint, exempt from `AuthGuard` |
+| 6.7 | `X-Forwarded-For` rate-limiter fix for production behind nginx |
+| 6.8 | AWS EC2 manual provisioning (t3.micro, Ubuntu 24.04, Elastic IP, security group) |
+| 6.9 | nginx reverse proxy + TLS via certbot |
+| 6.10 | systemd service + dedicated EBS volume for the DB |
+| 6.11 | GitHub Actions SSH deploy workflow |
+| 6.12 | S3 nightly backup script |
+| 6.13 | `docs/deployment.md` |
+| 6.14 | Terraform resources (`main.tf`, `variables.tf`, `outputs.tf`, `backend.tf`) |
+| 6.15 | `terraform import` of manually-created infra + `docs/terraform.md` |
 
 ---
 

@@ -1,0 +1,55 @@
+# Version control
+.git/
+.gitignore
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment variables — never bake secrets into an image
+.env
+.env.example
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+**/__pycache__/
+
+# SQLite database — must come from a volume, never baked into the image
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# Test / lint / type-check caches
+.pytest_cache/
+.coverage
+.coveragerc
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Application logs — never bake runtime logs into an image
+logs/
+
+# macOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Claude Code
+.claude/
+
+# Docs and project meta — not needed at runtime
+docs/
+README.md
+CLAUDE.md
+spec.md
+
+# Test suite — not shipped in the production image
+app/tests/

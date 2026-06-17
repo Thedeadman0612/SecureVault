@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import defusedxml.ElementTree as ET
+import xml.etree.ElementTree as StdET  # used only to BUILD XML (export) and for type hints — never to parse untrusted input
 
 from app.schemas.vault import VaultEntryResponse
 
@@ -97,7 +98,7 @@ def parse_keepass_xml(content: bytes) -> list[ImportedEntry]:
 
 
 def _walk_keepass_group(
-    group: ET.Element,
+    group: StdET.Element,
     category: str | None,
     entries: list[ImportedEntry],
     depth: int,
@@ -211,8 +212,6 @@ def build_keepass_xml(entries: list[VaultEntryResponse]) -> bytes:
     Returns:
         UTF-8 encoded bytes with an XML declaration.
     """
-    import xml.etree.ElementTree as StdET  # stdlib used only for *building* XML
-
     keepass_file = StdET.Element("KeePassFile")
     meta = StdET.SubElement(keepass_file, "Meta")
     StdET.SubElement(meta, "Generator").text = "SecureVault"
