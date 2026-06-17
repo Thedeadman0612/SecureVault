@@ -53,3 +53,21 @@ jobs:
       # the environment also flags pip/setuptools/wheel themselves, which are
       # runner tooling, not project dependencies we ship.
       - run: pip-audit -r requirements.txt
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, not just the latest commit — TruffleHog's value is
+          # catching a secret that was committed and later removed in a
+          # follow-up commit, which a flat-file scan of HEAD would never see.
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@v3.95.5
+        with:
+          path: ./
+          extra_args: --only-verified
+          # --only-verified: only fail CI on secrets TruffleHog confirms are
+          # live against the real provider API. This repo's test suite is
+          # full of intentionally fake passwords/tokens/TOTP secrets as
+          # fixtures — those never verify, so they don't trip false positives.
