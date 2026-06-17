@@ -34,6 +34,20 @@ services:
     volumes:
       - securevault_data:/app/data
       - securevault_logs:/app/logs
+    # Container hardening (6.5): root filesystem is read-only, so a compromised
+    # process can't tamper with the app code or drop a persistent payload.
+    # /app/data and /app/logs are the only writable paths (named volumes,
+    # above); /tmp is tmpfs because Starlette spools large multipart uploads
+    # (the KeePass/LastPass import feature) to disk via tempfile once a file
+    # exceeds ~1MB — tmpfs gives it somewhere to write without weakening the
+    # read-only root or persisting upload data anywhere.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
 volumes:
