@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+# Python 3.13 to match the version pinned in Dockerfile (python:3.13-slim) —
+# catches the same class of "works on my 3.14 venv, breaks in production"
+# bugs that the Docker build itself already surfaced once (see CLAUDE.md
+# Phase 6 / import_export.py).
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install ruff
+      - run: ruff check app/
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r requirements.txt
+      - run: pytest --cov=app --cov-report=term-missing
+        env:
+          # CI has no .env file (it's gitignored, never committed). These are
+          # throwaway values for an ephemeral runner — not real secrets.
+          SECRET_KEY: ci-test-secret-key-not-used-in-production
+          DATABASE_URL: "sqlite:///./securevault_ci_test.db"
+          ENVIRONMENT: development
+          SESSION_TIMEOUT_MINUTES: "10"
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install pip-audit
+      # Scoped to requirements.txt rather than the live environment — auditing
+      # the environment also flags pip/setuptools/wheel themselves, which are
+      # runner tooling, not project dependencies we ship.
+      - run: pip-audit -r requirements.txt
