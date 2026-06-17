@@ -39,8 +39,9 @@ STATIC FILES:
   Mounted at /static → app/static/. Exempt from AuthGuard (prefix /static/).
 
 ROUTERS:
-  /          → app/routes/auth.py  (setup, login, logout)
-  /          → app/routes/vault.py (vault dashboard, entry CRUD)
+  /          → app/routes/auth.py   (setup, login, logout)
+  /          → app/routes/vault.py  (vault dashboard, entry CRUD)
+  /health    → app/routes/health.py (liveness/readiness probe; exempt from AuthGuard)
 """
 
 import html
@@ -57,7 +58,7 @@ from app.middleware.csrf import CSRFMiddleware
 from app.middleware.csp import CSPMiddleware
 from app.middleware.encrypted_session import EncryptedSessionMiddleware
 from app.middleware.rate_limit import LoginRateLimitMiddleware, _LoginAttemptTracker
-from app.routes import auth, vault
+from app.routes import auth, health, vault
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +206,7 @@ app.add_middleware(CSPMiddleware)
 
 app.include_router(auth.router)
 app.include_router(vault.router)
+app.include_router(health.router)
 
 
 @app.get("/")

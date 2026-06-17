@@ -8,7 +8,7 @@ route handler. If `encryption_key` is absent from the session the request
 is redirected to /login — no route handler is invoked.
 
 EXEMPT PATHS (allowed without a session):
-  Exact matches:  /login, /setup
+  Exact matches:  /login, /setup, /health
   Prefix matches: /static/
 
 These match both GET and POST on the same path since HTML forms can only
@@ -48,6 +48,7 @@ _EXEMPT_EXACT: frozenset[str] = frozenset({
     "/2fa/verify",
     "/2fa/recovery",
     "/auth/timeout-notify",  # JS inactivity-timer notification; read-only, no state change
+    "/health",  # liveness/readiness probe — no session, no auth, just DB connectivity
 })
 _EXEMPT_PREFIXES: tuple[str, ...] = ("/static/",)
 
