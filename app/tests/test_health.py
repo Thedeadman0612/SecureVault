@@ -41,12 +41,12 @@ def test_engine():
 @pytest.fixture(scope="module")
 def client(test_engine) -> Generator[TestClient, None, None]:
     """TestClient with an in-memory DB and the full middleware stack."""
-    TestingSessionLocal = sessionmaker(
+    testing_session_local = sessionmaker(
         autocommit=False, autoflush=False, bind=test_engine
     )
 
     def override_get_db():
-        db = TestingSessionLocal()
+        db = testing_session_local()
         try:
             yield db
         finally:
@@ -97,12 +97,12 @@ class TestHealthEndpoint:
             response = client.get("/health")
         finally:
             # Restore the working override for subsequent tests in this module.
-            TestingSessionLocal = sessionmaker(
+            testing_session_local = sessionmaker(
                 autocommit=False, autoflush=False, bind=test_engine
             )
 
             def override_get_db():
-                db = TestingSessionLocal()
+                db = testing_session_local()
                 try:
                     yield db
                 finally:

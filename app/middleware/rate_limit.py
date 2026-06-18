@@ -57,11 +57,36 @@ outermost and wraps every response.
 
 IP ADDRESS NOTE
 ----------------
-We track by `request.client.host` — the direct TCP connection IP.
-Behind a reverse proxy (Nginx, Traefik) this would be the proxy's IP, not
-the user's.  For a local-first app served directly by uvicorn there is no
-proxy, so `client.host` is correct.  Phase 5 (Docker / deployment) should
-revisit this if a proxy is added.
+In development (ENVIRONMENT != "production") we track by
+`request.client.host` — the direct TCP connection IP. There is no reverse
+proxy in front of uvicorn locally, so this is the real client IP.
+
+In production (ENVIRONMENT == "production", nginx in front per Phase 6),
+`request.client.host` is nginx's own loopback/bridge IP — every request
+would collapse into one shared bucket, making the lockout either useless
+(if nginx's IP is allow-listed away) or a denial-of-service against every
+real user behind it (one attacker locks out everyone). We read the
+`X-Forwarded-For` header instead, taking the RIGHTMOST entry.
+
+WHY RIGHTMOST, NOT LEFTMOST:
+nginx is configured with `proxy_set_header X-Forwarded-For
+$proxy_add_x_forwarded_for;`, which APPENDS the IP it sees as the direct
+TCP peer to whatever X-Forwarded-For value the client already sent — it
+does not overwrite. A client can send an arbitrary `X-Forwarded-For:
+1.2.3.4` of their own; nginx turns that into `1.2.3.4, <real client IP>`.
+The leftmost entry is therefore always attacker-controlled and untrustworthy.
+The rightmost entry is the one nginx itself appended — the only entry we
+can trust, since it reflects what nginx actually observed on the wire.
+This assumes exactly one trusted proxy (nginx) sits directly in front of
+the app, which matches this project's deployment architecture (no CDN or
+second proxy hop). If a second proxy layer were ever added, this logic
+would need to walk to the correct trusted hop instead of always taking
+the last entry.
+
+We only trust this header in production. In development there is no nginx
+to normalise/append to the header, so trusting client-supplied
+X-Forwarded-For would let anyone spoof a different IP locally and dodge
+the lockout — `request.client.host` is used unconditionally instead.
 """
 
 import logging
@@ -73,6 +98,8 @@ from threading import Lock
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
+
+from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +269,7 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
         max_failures: int = _DEFAULT_MAX_FAILURES,
         lockout_seconds: int = _DEFAULT_LOCKOUT_SECONDS,
         _tracker_override: _LoginAttemptTracker | None = None,
+        _environment_override: str | None = None,
     ) -> None:
         super().__init__(app)
         # Accept an externally-created tracker so callers (e.g. main.py) can
@@ -251,6 +279,10 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
             max_failures=max_failures,
             lockout_seconds=lockout_seconds,
         )
+        # Captured once at construction — settings don't change at runtime.
+        # Override available for tests that need to exercise the production
+        # (X-Forwarded-For) code path without setting ENVIRONMENT globally.
+        self._environment = _environment_override or settings.ENVIRONMENT
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -260,9 +292,7 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
         if request.method != "POST" or request.url.path != "/login":
             return await call_next(request)
 
-        # Safely extract the client IP; fall back to loopback for test clients
-        # that don't set request.client.
-        ip: str = request.client.host if request.client else "127.0.0.1"
+        ip: str = _extract_client_ip(request, self._environment)
 
         # ── Pre-flight lockout check ────────────────────────────────────────
         locked, remaining = self._tracker.is_locked(ip)
@@ -294,6 +324,24 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _extract_client_ip(request: Request, environment: str) -> str:
+    """Return the IP address to key the rate-limit tracker by.
+
+    See the "IP ADDRESS NOTE" in this module's docstring for the full
+    reasoning. Summary: in production, trust the rightmost X-Forwarded-For
+    entry (the one nginx itself appended); otherwise use the direct TCP
+    peer, since there is no proxy normalising the header in that case.
+    """
+    if environment == "production":
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            rightmost = forwarded.split(",")[-1].strip()
+            if rightmost:
+                return rightmost
+
+    return request.client.host if request.client else "127.0.0.1"
 
 
 def _lockout_page(seconds_remaining: int) -> str:

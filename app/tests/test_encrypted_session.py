@@ -108,12 +108,12 @@ def test_engine():
 @pytest.fixture(scope="module")
 def full_client(test_engine) -> Generator[TestClient, None, None]:
     """TestClient wired to the real app with an in-memory DB."""
-    TestingSessionLocal = sessionmaker(
+    testing_session_local = sessionmaker(
         autocommit=False, autoflush=False, bind=test_engine
     )
 
     def override_get_db():
-        db = TestingSessionLocal()
+        db = testing_session_local()
         try:
             yield db
         finally:

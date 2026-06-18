@@ -52,10 +52,13 @@ from sqlalchemy.pool import StaticPool
 
 from app.database.session import get_db
 from app.main import app as main_app
+from starlette.requests import Request
+
 from app.middleware.rate_limit import (
     LoginRateLimitMiddleware,
     _LoginAttemptTracker,
     _DEFAULT_MAX_FAILURES,
+    _extract_client_ip,
     _lockout_page,
 )
 from app.models.user import Base
@@ -68,17 +71,25 @@ _TEST_MAX_FAILURES = 3
 _TEST_LOCKOUT_SECONDS = 60
 
 
-def _make_stub_app(login_status: int = 401) -> tuple[FastAPI, TestClient]:
+def _make_stub_app(
+    login_status: int = 401, environment_override: str | None = None
+) -> tuple[FastAPI, TestClient]:
     """Create a minimal app whose POST /login returns a fixed status code.
 
     This lets us drive the middleware through failure and success scenarios
     without involving auth, CSRF, or database logic.
+
+    ``environment_override`` is forwarded to the middleware's
+    ``_environment_override`` constructor parameter so tests can exercise the
+    production (X-Forwarded-For) IP-extraction path without setting
+    ENVIRONMENT globally for the whole test process.
     """
     stub = FastAPI()
     stub.add_middleware(
         LoginRateLimitMiddleware,
         max_failures=_TEST_MAX_FAILURES,
         lockout_seconds=_TEST_LOCKOUT_SECONDS,
+        _environment_override=environment_override,
     )
 
     @stub.post("/login")
@@ -120,12 +131,12 @@ def test_engine():
 
 @pytest.fixture(scope="module")
 def full_client(test_engine) -> Generator[TestClient, None, None]:
-    TestingSessionLocal = sessionmaker(
+    testing_session_local = sessionmaker(
         autocommit=False, autoflush=False, bind=test_engine
     )
 
     def override_get_db():
-        db = TestingSessionLocal()
+        db = testing_session_local()
         try:
             yield db
         finally:
@@ -161,74 +172,74 @@ class TestLoginAttemptTracker:
 
     def test_new_ip_is_not_locked(self):
         t = self._tracker()
-        locked, remaining = t.is_locked("10.0.0.1")
+        locked, remaining = t.is_locked("10.0.0.1")  # NOSONAR -- test fixture value, not a real secret/host
         assert not locked
         assert remaining == 0
 
     def test_failure_count_starts_at_zero(self):
         t = self._tracker()
-        assert t.failure_count("10.0.0.1") == 0
+        assert t.failure_count("10.0.0.1") == 0  # NOSONAR -- test fixture value, not a real secret/host
 
     def test_failures_accumulate(self):
         t = self._tracker(max_failures=5)
         for i in range(1, 5):
-            count = t.record_failure("10.0.0.2")
+            count = t.record_failure("10.0.0.2")  # NOSONAR -- test fixture value, not a real secret/host
             assert count == i
 
     def test_lockout_triggers_at_max_failures(self):
         t = self._tracker(max_failures=3)
-        t.record_failure("10.0.0.3")
-        t.record_failure("10.0.0.3")
-        assert not t.is_locked("10.0.0.3")[0]  # 2 failures — not yet
-        t.record_failure("10.0.0.3")            # 3rd failure → lockout
-        locked, remaining = t.is_locked("10.0.0.3")
+        t.record_failure("10.0.0.3")  # NOSONAR -- test fixture value, not a real secret/host
+        t.record_failure("10.0.0.3")  # NOSONAR -- test fixture value, not a real secret/host
+        assert not t.is_locked("10.0.0.3")[0]  # NOSONAR -- test fixture value (2 failures — not yet)
+        t.record_failure("10.0.0.3")  # NOSONAR -- test fixture value (3rd failure → lockout)
+        locked, remaining = t.is_locked("10.0.0.3")  # NOSONAR -- test fixture value, not a real secret/host
         assert locked
         assert remaining > 0
 
     def test_lockout_remaining_is_approximately_correct(self):
         t = self._tracker(max_failures=1, lockout_seconds=60)
-        t.record_failure("10.0.0.4")
-        _, remaining = t.is_locked("10.0.0.4")
+        t.record_failure("10.0.0.4")  # NOSONAR -- test fixture value, not a real secret/host
+        _, remaining = t.is_locked("10.0.0.4")  # NOSONAR -- test fixture value, not a real secret/host
         # Should be close to 60 seconds; allow 5 seconds for slow CI hosts.
         assert 55 <= remaining <= 60
 
     def test_record_success_before_lockout_resets_counter(self):
         t = self._tracker(max_failures=5)
-        t.record_failure("10.0.0.5")
-        t.record_failure("10.0.0.5")
-        t.record_success("10.0.0.5")
-        assert t.failure_count("10.0.0.5") == 0
-        assert not t.is_locked("10.0.0.5")[0]
+        t.record_failure("10.0.0.5")  # NOSONAR -- test fixture value, not a real secret/host
+        t.record_failure("10.0.0.5")  # NOSONAR -- test fixture value, not a real secret/host
+        t.record_success("10.0.0.5")  # NOSONAR -- test fixture value, not a real secret/host
+        assert t.failure_count("10.0.0.5") == 0  # NOSONAR -- test fixture value, not a real secret/host
+        assert not t.is_locked("10.0.0.5")[0]  # NOSONAR -- test fixture value, not a real secret/host
 
     def test_record_success_on_unknown_ip_is_safe(self):
         """record_success on an IP with no record should not raise."""
         t = self._tracker()
-        t.record_success("192.168.1.99")  # should not raise
+        t.record_success("192.168.1.99")  # NOSONAR -- test fixture value (should not raise)
 
     def test_lockout_expires_after_zero_seconds(self):
         """Use lockout_seconds=0 to instantly expire the lockout."""
         t = self._tracker(max_failures=1, lockout_seconds=0)
-        t.record_failure("10.0.0.6")
+        t.record_failure("10.0.0.6")  # NOSONAR -- test fixture value, not a real secret/host
         # Even though lockout was triggered, it expired immediately.
         # is_locked cleans up expired records and returns False.
-        locked, _ = t.is_locked("10.0.0.6")
+        locked, _ = t.is_locked("10.0.0.6")  # NOSONAR -- test fixture value, not a real secret/host
         assert not locked
 
     def test_different_ips_are_tracked_independently(self):
         t = self._tracker(max_failures=3)
-        t.record_failure("10.0.0.7")
-        t.record_failure("10.0.0.7")
-        t.record_failure("10.0.0.7")  # 10.0.0.7 is locked
-        assert t.is_locked("10.0.0.7")[0]
-        assert not t.is_locked("10.0.0.8")[0]  # 10.0.0.8 is clean
+        t.record_failure("10.0.0.7")  # NOSONAR -- test fixture value, not a real secret/host
+        t.record_failure("10.0.0.7")  # NOSONAR -- test fixture value, not a real secret/host
+        t.record_failure("10.0.0.7")  # NOSONAR -- test fixture value (10.0.0.7 is locked)
+        assert t.is_locked("10.0.0.7")[0]  # NOSONAR -- test fixture value, not a real secret/host
+        assert not t.is_locked("10.0.0.8")[0]  # NOSONAR -- test fixture value (10.0.0.8 is clean)
 
     def test_reset_all_clears_all_records(self):
         t = self._tracker(max_failures=3)
-        t.record_failure("10.0.0.9")
-        t.record_failure("10.0.0.10")
+        t.record_failure("10.0.0.9")  # NOSONAR -- test fixture value, not a real secret/host
+        t.record_failure("10.0.0.10")  # NOSONAR -- test fixture value, not a real secret/host
         t.reset_all()
-        assert t.failure_count("10.0.0.9") == 0
-        assert t.failure_count("10.0.0.10") == 0
+        assert t.failure_count("10.0.0.9") == 0  # NOSONAR -- test fixture value, not a real secret/host
+        assert t.failure_count("10.0.0.10") == 0  # NOSONAR -- test fixture value, not a real secret/host
 
     def test_sub_lockout_record_evicted_after_failure_window(self):
         """Partial-failure records below max_failures are evicted after failure_window_seconds.
@@ -241,13 +252,13 @@ class TestLoginAttemptTracker:
             lockout_seconds=60,
             failure_window_seconds=0,
         )
-        t.record_failure("10.0.0.11")  # 1/5 — no lockout triggered
-        t.record_failure("10.0.0.11")  # 2/5 — still below threshold
+        t.record_failure("10.0.0.11")  # NOSONAR -- test fixture value (1/5, no lockout triggered)
+        t.record_failure("10.0.0.11")  # NOSONAR -- test fixture value (2/5, still below threshold)
         # failure_window_seconds=0 means (now - last_failure_at) >= 0 is always
         # True, so is_locked() evicts the record immediately.
-        locked, _ = t.is_locked("10.0.0.11")
+        locked, _ = t.is_locked("10.0.0.11")  # NOSONAR -- test fixture value, not a real secret/host
         assert not locked
-        assert t.failure_count("10.0.0.11") == 0  # record evicted
+        assert t.failure_count("10.0.0.11") == 0  # NOSONAR -- test fixture value (record evicted)
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +393,7 @@ class TestRateLimitInFullStack:
         csrf = _get_csrf(full_client, "/login")
         response = full_client.post("/login", data={
             "csrf_token": csrf,
-            "password": "definitely-wrong",
+            "password": "definitely-wrong",  # NOSONAR -- test fixture value, not a real secret/host
         })
         assert response.status_code == 401
 
@@ -476,3 +487,128 @@ class TestLockoutPageFormatting:
         """Page must include a link back to /login."""
         page = _lockout_page(60)
         assert 'href="/login"' in page
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _extract_client_ip
+# ---------------------------------------------------------------------------
+
+
+def _make_request(
+    headers: dict[str, str] | None = None, client_host: str | None = "1.2.3.4"  # NOSONAR -- test fixture value, not a real secret/host
+) -> Request:
+    """Build a minimal Starlette Request with the given headers/client IP.
+
+    Bypasses HTTP entirely — exercises _extract_client_ip as a pure function.
+    """
+    encoded_headers = [
+        (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
+    ]
+    scope = {
+        "type": "http",
+        "headers": encoded_headers,
+        "client": (client_host, 12345) if client_host else None,
+    }
+    return Request(scope)
+
+
+class TestExtractClientIp:
+    """Unit tests for the X-Forwarded-For trust logic in isolation."""
+
+    def test_production_uses_rightmost_xff_entry(self):
+        request = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9, 5.5.5.5"}, client_host="10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert _extract_client_ip(request, "production") == "5.5.5.5"  # NOSONAR -- test fixture value, not a real secret/host
+
+    def test_production_strips_whitespace_around_rightmost_entry(self):
+        request = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9,   5.5.5.5  "}, client_host="10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert _extract_client_ip(request, "production") == "5.5.5.5"  # NOSONAR -- test fixture value, not a real secret/host
+
+    def test_production_single_xff_entry(self):
+        request = _make_request(
+            headers={"X-Forwarded-For": "5.5.5.5"}, client_host="10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert _extract_client_ip(request, "production") == "5.5.5.5"  # NOSONAR -- test fixture value, not a real secret/host
+
+    def test_production_falls_back_to_client_host_when_xff_absent(self):
+        request = _make_request(headers={}, client_host="10.0.0.1")  # NOSONAR -- test fixture value, not a real secret/host
+        assert _extract_client_ip(request, "production") == "10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+
+    def test_production_falls_back_when_rightmost_entry_is_empty(self):
+        """A trailing comma (malformed header) must not yield an empty-string IP."""
+        request = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9,"}, client_host="10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert _extract_client_ip(request, "production") == "10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+
+    def test_development_ignores_xff_header_even_if_present(self):
+        request = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9, 5.5.5.5"}, client_host="10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert _extract_client_ip(request, "development") == "10.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+
+    def test_no_client_falls_back_to_loopback(self):
+        request = _make_request(headers={}, client_host=None)
+        assert _extract_client_ip(request, "development") == "127.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+
+        request = _make_request(headers={}, client_host=None)
+        assert _extract_client_ip(request, "production") == "127.0.0.1"  # NOSONAR -- test fixture value, not a real secret/host
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: production X-Forwarded-For trust via the real middleware
+# ---------------------------------------------------------------------------
+
+
+class TestProductionXForwardedFor:
+    """Confirms the middleware keys the lockout tracker by the rightmost
+    X-Forwarded-For entry in production, and ignores the header entirely
+    outside production — exercised through real HTTP requests rather than
+    calling _extract_client_ip directly.
+    """
+
+    def test_forged_leftmost_entry_does_not_evade_lockout(self):
+        """Same rightmost (real) hop, different forged leftmost entries —
+        must still accumulate toward the SAME lockout bucket."""
+        _, client = _make_stub_app(login_status=401, environment_override="production")
+
+        for _ in range(_TEST_MAX_FAILURES):
+            client.post(
+                "/login", headers={"X-Forwarded-For": "1.1.1.1, 8.8.8.8"}  # NOSONAR -- test fixture value, not a real secret/host
+            )
+        # Different forged leftmost, same trusted rightmost hop.
+        response = client.post(
+            "/login", headers={"X-Forwarded-For": "9.9.9.9, 8.8.8.8"}  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert response.status_code == 429
+
+    def test_different_rightmost_entries_are_independent_buckets(self):
+        _, client = _make_stub_app(login_status=401, environment_override="production")
+
+        for _ in range(_TEST_MAX_FAILURES):
+            client.post("/login", headers={"X-Forwarded-For": "1.1.1.1, 7.7.7.7"})  # NOSONAR -- test fixture value, not a real secret/host
+        # A different trusted (rightmost) hop must not be locked out.
+        response = client.post(
+            "/login", headers={"X-Forwarded-For": "1.1.1.1, 6.6.6.6"}  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert response.status_code != 429
+
+    def test_non_production_ignores_xff_header(self):
+        """Outside production, varying X-Forwarded-For values must not create
+        separate buckets — every request shares the same real TestClient IP."""
+        _, client = _make_stub_app(
+            login_status=401, environment_override="development"
+        )
+
+        for i in range(_TEST_MAX_FAILURES):
+            # A different bogus header on every request — must be ignored.
+            client.post(
+                "/login", headers={"X-Forwarded-For": f"{i}.{i}.{i}.{i}"}
+            )
+        response = client.post(
+            "/login", headers={"X-Forwarded-For": "255.255.255.255"}  # NOSONAR -- test fixture value, not a real secret/host
+        )
+        assert response.status_code == 429
